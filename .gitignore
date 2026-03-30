@@ -1,0 +1,31 @@
+__pycache__/
+*.pyc
+.DS_Store
+.pytest_cache/
+.ipynb_checkpoints/
+.venv/
+env/
+*.mid.tmp
+*.midi.tmp
+*.wav.tmp
+*.flac.tmp
+*.log
+
+# Local input audio
+assets/input/*
+!assets/input/.gitkeep
+*.mp3
+
+# Generated pipeline outputs
+assets/output/convert/*
+!assets/output/convert/.gitkeep
+assets/output/raw/*
+!assets/output/raw/.gitkeep
+assets/output/clean/*
+!assets/output/clean/.gitkeep
+assets/output/rendered/*
+!assets/output/rendered/.gitkeep
+
+# Local soundfonts and extracted runtime assets
+assets/soundfonts/*
+!assets/soundfonts/.gitkeep

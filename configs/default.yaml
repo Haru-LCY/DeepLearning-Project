@@ -1,0 +1,11 @@
+input_audio: assets/input/example.wav
+preprocess_output_dir: assets/output/convert
+preprocessed_audio: assets/output/convert/example.wav
+transcription_output_dir: assets/output/raw
+cleaned_midi_output_dir: assets/output/clean
+render_output_dir: assets/output/rendered
+output_dir: assets/output
+soundfont_path: assets/soundfonts/default.sf2
+min_note_duration: 0.05
+preprocess_sample_rate: 22050
+preprocess_mono: true

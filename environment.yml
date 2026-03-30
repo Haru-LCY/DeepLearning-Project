@@ -1,0 +1,16 @@
+name: dl
+channels:
+  - defaults
+dependencies:
+  - python=3.10
+  - pip
+  - pip:
+      - basic-pitch
+      - midi2audio
+      - pretty_midi
+      - mido
+      - librosa
+      - soundfile
+      - numpy<2
+      - pyyaml
+      - tqdm

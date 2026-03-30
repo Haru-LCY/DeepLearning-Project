@@ -1,0 +1,9 @@
+basic-pitch
+midi2audio
+pretty_midi
+mido
+librosa
+soundfile
+numpy<2
+pyyaml
+tqdm
