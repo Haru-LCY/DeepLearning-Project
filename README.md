@@ -1,160 +1,159 @@
-# Fingerstyle Guitar Audio-to-MIDI MVP
+# Audio-to-MIDI MVP with Optional PianistTransformer Rendering
 
 Chinese version: `README.zh.md`
 
-This repository contains a lightweight Linux-first MVP for converting single-track fingerstyle guitar audio into:
+This repository contains a Linux-first symbolic music pipeline that converts one input audio file into:
 
 1. a transcribed MIDI file
-2. a piano-rendered WAV file
+2. a cleaned MIDI file
+3. an optional expressive piano MIDI rendered by PianistTransformer
+4. a final piano WAV file
 
-The current pipeline is intentionally simple and CPU-friendly:
-
-1. preprocess input audio into a canonical WAV
-2. transcribe the WAV to raw MIDI with `basic-pitch`
-3. remove very short MIDI notes with `pretty_midi`
-4. render the cleaned MIDI to WAV with `midi2audio` + `FluidSynth`
-
-This repo does not include training code, MT3 integration, batch processing, or any frontend/UI.
+The baseline pipeline still works on its own. PianistTransformer is now an optional stage inside the same Python environment by default, while still allowing an explicit `--pt-python` override when you want to call a different interpreter.
 
 ## Current Status
 
-The MVP is runnable end-to-end on Linux and has been validated in this repo with:
+The repository now supports a single-environment workflow centered on Python `3.11`:
 
-- Python `3.10`
 - `basic-pitch`
 - `pretty_midi`
 - `midi2audio`
 - `FluidSynth`
-- a GM `.sf2` soundfont
+- `PianistTransformer`
+- PyTorch `2.7.1` with CUDA `11.8` wheels
 
-The current implementation is CPU-first. A GPU is available on the target server, but this stage does not require CUDA or GPU-specific libraries.
+The intended server workflow is:
+
+- run the full baseline pipeline in the `pianist-transformer` environment
+- enable PianistTransformer with a CLI flag when expressive piano rendering is desired
+- use the current Python interpreter by default for the PT stage
+
+On systems with newer NVIDIA drivers, the official PyTorch `cu118` wheels work well even if the system CUDA runtime is newer.
 
 ## Pipeline Overview
 
-Input audio:
+Baseline path:
 
-- accepted as one file path, for example `sample.mp3`
+1. preprocess audio into canonical mono WAV
+2. transcribe WAV to raw MIDI with `basic-pitch`
+3. clean MIDI with `pretty_midi`
+4. render cleaned MIDI to WAV with `midi2audio` + FluidSynth
 
-Generated outputs:
+Optional expressive path:
 
-- preprocessed WAV: `assets/output/convert/<name>.wav`
-- raw MIDI: `assets/output/raw/<name>_basic_pitch.mid`
-- cleaned MIDI: `assets/output/clean/<name>_clean.mid`
-- rendered WAV: `assets/output/rendered/<name>.wav`
+1. preprocess audio
+2. transcribe to raw MIDI
+3. clean MIDI
+4. render expressive raw MIDI with PianistTransformer
+5. map expressive timing back to score-aligned MIDI
+6. render mapped expressive MIDI to WAV
 
-The main entry point is:
+Default output locations:
 
-```bash
-python scripts/run_pipeline.py ...
-```
+- preprocessed WAV: `assets/output/convert/<stem>.wav`
+- raw MIDI: `assets/output/raw/<stem>_basic_pitch.mid`
+- cleaned MIDI: `assets/output/clean/<stem>_clean.mid`
+- expressive raw MIDI: `assets/output/expressive/raw/<stem>_pt_raw.mid`
+- expressive mapped MIDI: `assets/output/expressive/mapped/<stem>_pt_mapped.mid`
+- rendered WAV: `assets/output/rendered/<stem>.wav`
 
-It prints logs, shows a 4-stage progress bar, and prints the final output paths at the end.
+Main entry points:
+
+- `python scripts/run_pipeline.py ...`
+- `python scripts/run_expressive_render.py ...`
 
 ## Project Structure
 
 ```text
 .
 ├── README.md
+├── README.zh.md
+├── environment.yml
 ├── requirements.txt
-├── .gitignore
+├── PianistTransformer/
 ├── configs/
-│   └── default.yaml
 ├── assets/
-│   ├── input/
-│   ├── output/
-│   │   ├── clean/
-│   │   ├── convert/
-│   │   ├── raw/
-│   │   └── rendered/
-│   └── soundfonts/
 ├── scripts/
 │   ├── run_cleanup_midi.py
+│   ├── run_expressive_render.py
 │   ├── run_pipeline.py
 │   ├── run_preprocess_audio.py
 │   ├── run_render.py
 │   └── run_transcription.py
 ├── src/
-│   ├── __init__.py
 │   ├── audio_preprocess.py
+│   ├── expressive_render.py
 │   ├── midi_cleanup.py
 │   ├── render.py
 │   ├── transcription.py
 │   └── utils.py
 └── tests/
-    └── test_smoke.py
 ```
 
-Directory roles:
+Key directories:
 
-- `assets/input/`: optional place to store input audio files
 - `assets/output/convert/`: canonical mono WAV files at `22050 Hz`
 - `assets/output/raw/`: raw MIDI predicted by `basic-pitch`
 - `assets/output/clean/`: cleaned MIDI after short-note removal
+- `assets/output/expressive/raw/`: raw expressive MIDI from PianistTransformer
+- `assets/output/expressive/mapped/`: mapped/editable expressive MIDI used for default PT rendering
 - `assets/output/rendered/`: final rendered WAV files
-- `assets/soundfonts/`: soundfont assets and optional local FluidSynth runtime files
-- `scripts/`: user-facing CLI entry points, including standalone stage runners and the end-to-end pipeline
-- `src/`: implementation modules for each stage
 
 ## Environment Setup
 
-### 1. Create the Python environment
+### Recommended single environment
 
-Use Python `3.10`.
-
-Recommended:
+Use the provided environment file:
 
 ```bash
 conda env create -f environment.yml
-conda activate dl
+conda activate pianist-transformer
 ```
 
 Equivalent manual setup:
 
 ```bash
-conda create -n dl python=3.10 pip -y
-conda activate dl
+conda create -n pianist-transformer python=3.11 pip -y
+conda activate pianist-transformer
 python -m pip install -r requirements.txt
 ```
 
 Notes:
 
-- `requirements.txt` pins `numpy<2` because `basic-pitch` + `tflite-runtime` can fail with NumPy `2.x`.
-- `environment.yml` is the preferred reproducible environment entrypoint for teammates.
-- If `conda` is not already initialized in your shell, source your local `conda.sh` first.
+- `requirements.txt` includes both the baseline stack and the PianistTransformer runtime stack
+- `numpy<2` remains pinned to preserve `basic-pitch` compatibility
+- the file also adds the official PyTorch `cu118` index for GPU wheels
+- on Python `3.11`, `basic-pitch` may install the TensorFlow backend instead of the older `tflite-runtime` path
 
-Example:
-
-```bash
-source /path/to/miniconda3/etc/profile.d/conda.sh
-conda activate dl
-```
-
-### 2. Confirm Python dependencies
+Confirm imports:
 
 ```bash
 python - <<'PY'
-import librosa
-import soundfile
 import basic_pitch
 import pretty_midi
 import midi2audio
+import librosa
+import soundfile
+import torch
+import transformers
+import accelerate
+import miditoolkit
+import partitura
 import numpy
 print("python_deps_ok")
+print(torch.__version__, torch.cuda.is_available(), torch.version.cuda)
+print(numpy.__version__)
 PY
 ```
 
 ## FluidSynth and SoundFont Setup
 
-Rendering requires two things:
+Rendering requires:
 
 1. a `fluidsynth` executable
-2. a `.sf2` soundfont file
+2. a `.sf2` soundfont
 
-You have two ways to provide them.
-
-### Option A: Use the local runtime files already present in this repo
-
-If you already prepared the following local files, you can use them directly:
+The repository already supports a local no-sudo runtime layout:
 
 - soundfont:
   `assets/soundfonts/extracted/usr/share/sounds/sf2/FluidR3_GM.sf2`
@@ -163,7 +162,7 @@ If you already prepared the following local files, you can use them directly:
 - runtime libs:
   `assets/soundfonts/runtime_libs/usr/lib/x86_64-linux-gnu`
 
-Export them for convenience:
+Recommended shell variables:
 
 ```bash
 export SOUNDFONT=assets/soundfonts/extracted/usr/share/sounds/sf2/FluidR3_GM.sf2
@@ -171,62 +170,15 @@ export FLUIDSYNTH_BIN=assets/soundfonts/fluidsynth_pkg/usr/bin/fluidsynth
 export FLUIDSYNTH_LIB_DIR=$(pwd)/assets/soundfonts/runtime_libs/usr/lib/x86_64-linux-gnu
 ```
 
-### Option B: Rebuild the local runtime without sudo
-
-If those files are missing, you can recreate them on Ubuntu/Debian-like systems without root:
-
-```bash
-mkdir -p assets/soundfonts
-cd assets/soundfonts
-
-apt download fluid-soundfont-gm
-apt download fluidsynth
-apt download libfluidsynth3
-apt download libsdl2-2.0-0
-apt download libinstpatch-1.0-2
-apt download libdecor-0-0
-
-mkdir -p extracted fluidsynth_pkg runtime_libs
-
-dpkg-deb -x fluid-soundfont-gm_*.deb extracted
-dpkg-deb -x fluidsynth_*.deb fluidsynth_pkg
-
-for pkg in libfluidsynth3_*.deb libsdl2-2.0-0_*.deb libinstpatch-1.0-2_*.deb libdecor-0-0_*.deb; do
-  dpkg-deb -x "$pkg" runtime_libs
-done
-
-cd ../..
-```
-
-Then export:
-
-```bash
-export SOUNDFONT=assets/soundfonts/extracted/usr/share/sounds/sf2/FluidR3_GM.sf2
-export FLUIDSYNTH_BIN=assets/soundfonts/fluidsynth_pkg/usr/bin/fluidsynth
-export FLUIDSYNTH_LIB_DIR=$(pwd)/assets/soundfonts/runtime_libs/usr/lib/x86_64-linux-gnu
-```
-
-### 3. Confirm FluidSynth runtime
+Quick runtime check:
 
 ```bash
 LD_LIBRARY_PATH="$FLUIDSYNTH_LIB_DIR" "$FLUIDSYNTH_BIN" --version
 ```
 
-Expected output should include something like:
+## Baseline End-to-End Command
 
-```text
-FluidSynth runtime version 2.x
-```
-
-## Quick Start
-
-Assuming:
-
-- you already activated `dl`
-- you already set `SOUNDFONT`, `FLUIDSYNTH_BIN`, and `FLUIDSYNTH_LIB_DIR`
-- you want to use the example file `sample.mp3`
-
-Run the full MVP:
+This runs the original 4-stage pipeline in the single `pianist-transformer` environment:
 
 ```bash
 python scripts/run_pipeline.py \
@@ -237,79 +189,16 @@ python scripts/run_pipeline.py \
   --fluidsynth-lib-dir "$FLUIDSYNTH_LIB_DIR"
 ```
 
-Expected generated files:
+Expected artifacts:
 
 - `assets/output/convert/sample.wav`
 - `assets/output/raw/sample_basic_pitch.mid`
 - `assets/output/clean/sample_clean.mid`
 - `assets/output/rendered/sample.wav`
 
-## Step-by-Step Usage
+## Optional PianistTransformer in the Main Pipeline
 
-### 1. Audio preprocessing
-
-Convert one input audio file into a canonical WAV:
-
-```bash
-python scripts/run_preprocess_audio.py \
-  --input sample.mp3 \
-  --output assets/output/convert/sample.wav \
-  --sr 22050
-```
-
-Behavior:
-
-- converts to mono
-- resamples to `22050 Hz`
-- writes a `.wav`
-
-### 2. Transcription
-
-Transcribe one preprocessed WAV file to raw MIDI:
-
-```bash
-python scripts/run_transcription.py \
-  --input assets/output/convert/sample.wav \
-  --output-dir assets/output/raw
-```
-
-Expected output:
-
-- `assets/output/raw/sample_basic_pitch.mid`
-
-### 3. MIDI cleanup
-
-Remove notes shorter than the configured threshold:
-
-```bash
-python scripts/run_cleanup_midi.py \
-  --input-midi assets/output/raw/sample_basic_pitch.mid \
-  --output-midi assets/output/clean/sample_clean.mid \
-  --min-note-duration 0.05
-```
-
-Note:
-
-- today, cleanup only removes very short notes
-- the behavior is deterministic and intentionally minimal
-- standalone cleanup is also included inside `scripts/run_pipeline.py`
-
-### 4. Rendering
-
-Render one cleaned MIDI file to WAV:
-
-```bash
-python scripts/run_render.py \
-  --input-midi assets/output/clean/sample_clean.mid \
-  --output-wav assets/output/rendered/sample_clean.wav \
-  --soundfont "$SOUNDFONT" \
-  --fluidsynth-bin "$FLUIDSYNTH_BIN" \
-  --fluidsynth-lib-dir "$FLUIDSYNTH_LIB_DIR"
-```
-
-## End-to-End Command
-
-This is the one command a teammate should be able to run after environment setup:
+Enable the expressive stage with:
 
 ```bash
 python scripts/run_pipeline.py \
@@ -317,143 +206,114 @@ python scripts/run_pipeline.py \
   --output-root assets/output \
   --soundfont "$SOUNDFONT" \
   --fluidsynth-bin "$FLUIDSYNTH_BIN" \
-  --fluidsynth-lib-dir "$FLUIDSYNTH_LIB_DIR"
+  --fluidsynth-lib-dir "$FLUIDSYNTH_LIB_DIR" \
+  --enable-pianist-transformer
 ```
 
-What it does:
+By default, the PT stage uses the current Python interpreter. This is the recommended single-environment workflow.
 
-1. preprocesses `sample.mp3` to `assets/output/convert/sample.wav`
-2. transcribes it to `assets/output/raw/sample_basic_pitch.mid`
-3. cleans it to `assets/output/clean/sample_clean.mid`
-4. renders it to `assets/output/rendered/sample.wav`
+Optional PT-specific flags:
 
-What it prints:
+- `--pt-python /path/to/python`
+- `--pt-model-dir PianistTransformer/models/sft`
+- `--pt-device auto|cuda|cpu`
+- `--pt-temperature 1.0`
+- `--pt-top-p 0.95`
+- `--pt-max-tempo 300`
 
-- stage logs
-- a `tqdm` progress bar
-- final output paths
+When PT is enabled, the pipeline additionally creates:
 
-## Example Files in This Repo
+- `assets/output/expressive/raw/<stem>_pt_raw.mid`
+- `assets/output/expressive/mapped/<stem>_pt_mapped.mid`
 
-Suggested first run:
+The mapped expressive MIDI is the default render input for the final WAV.
+
+## Standalone Expressive Rendering
+
+If you already have a cleaned MIDI file and want to run only the PT stage:
 
 ```bash
-python scripts/run_pipeline.py \
-  --input /path/to/your/input.mp3 \
+python scripts/run_expressive_render.py \
+  --input-midi assets/output/clean/hoshi_clean.mid \
   --output-root assets/output \
+  --render \
   --soundfont "$SOUNDFONT" \
   --fluidsynth-bin "$FLUIDSYNTH_BIN" \
   --fluidsynth-lib-dir "$FLUIDSYNTH_LIB_DIR"
 ```
 
-## Configuration Notes
+This writes:
 
-There is a placeholder config file at:
+- `assets/output/expressive/raw/hoshi_pt_raw.mid`
+- `assets/output/expressive/mapped/hoshi_pt_mapped.mid`
+- `assets/output/rendered/hoshi_pt.wav`
 
-```text
-configs/default.yaml
+## Linux and Slurm Notes
+
+- The repository is designed for Linux.
+- The baseline stages do not require GPU.
+- PianistTransformer benefits from GPU when available.
+- On some clusters, `torch.cuda.is_available()` may be `False` in a plain shell but `True` inside a Slurm allocation.
+
+If you already have an interactive GPU job, you can run PT inside it, for example:
+
+```bash
+srun --jobid=<your_jobid> --overlap bash -lc 'python scripts/run_expressive_render.py ...'
 ```
-
-Current CLI scripts are still primarily argument-driven. The YAML file is useful as a reference for default path conventions, but the main pipeline is not yet fully config-driven.
-
-Current keys:
-
-- `input_audio`
-- `preprocess_output_dir`
-- `preprocessed_audio`
-- `transcription_output_dir`
-- `cleaned_midi_output_dir`
-- `render_output_dir`
-- `output_dir`
-- `soundfont_path`
-- `min_note_duration`
-- `preprocess_sample_rate`
-- `preprocess_mono`
-
-## Linux Notes
-
-- This MVP is designed for Linux.
-- The current implementation does not require CUDA.
-- The current implementation does not use the GPU, even if one is available.
-- Rendering depends on `FluidSynth` plus a valid `.sf2` file.
-- If you use a local extracted FluidSynth binary instead of a system install, also pass `--fluidsynth-lib-dir`.
-
-## Known Limitations
-
-- single-file processing only
-- no batch mode
-- no MT3 integration
-- no frontend
-- no training code
-- cleanup only removes notes shorter than a threshold
-- rendering uses a general MIDI soundfont, not a guitar-specific instrument model
 
 ## Troubleshooting
 
-### `basic-pitch` fails with a NumPy / TFLite error
+### `basic-pitch` fails because of NumPy compatibility
 
-Make sure your environment uses `numpy<2`:
+Keep `numpy<2`:
 
 ```bash
 python -m pip install "numpy<2"
 python -m pip install -r requirements.txt
 ```
 
+### TensorFlow prints CUDA/XLA warnings during import
+
+This can happen because `basic-pitch` installs TensorFlow in the unified Python `3.11` environment. These warnings are noisy but do not necessarily indicate a failure in the PT stage or the baseline stage.
+
 ### `basic-pitch` command not found
 
-Make sure the `dl` environment is activated:
+Make sure the environment is active:
 
 ```bash
-conda activate dl
+conda activate pianist-transformer
 which basic-pitch
 ```
 
-### `fluidsynth` not found
+### `fluidsynth` or shared libraries are missing
 
-Either:
-
-- install `fluidsynth` system-wide, or
-- use the local runtime method in this README and pass `--fluidsynth-bin`
-
-### SoundFont file not found
-
-Check that:
+Pass both:
 
 ```bash
-ls "$SOUNDFONT"
-```
-
-returns the `.sf2` file you expect.
-
-### Rendering fails because of shared library errors
-
-If you are using the local extracted FluidSynth runtime, make sure you passed:
-
-```bash
+--fluidsynth-bin "$FLUIDSYNTH_BIN" \
 --fluidsynth-lib-dir "$FLUIDSYNTH_LIB_DIR"
 ```
 
-and that `FLUIDSYNTH_LIB_DIR` points to:
+### PT model files are missing
+
+The local model directory must contain:
+
+- `config.json`
+- `generation_config.json`
+- `model.safetensors`
+
+under:
 
 ```text
-assets/soundfonts/runtime_libs/usr/lib/x86_64-linux-gnu
+PianistTransformer/models/sft/
 ```
-
-### The pipeline is slow
-
-That is expected for the current MVP:
-
-- transcription runs on CPU
-- rendering a long MIDI file can also take time
-
-The current priority is simplicity and reproducibility, not speed.
 
 ## Minimal Verification Checklist
 
-After setup, a teammate should be able to run:
+Baseline:
 
 ```bash
-conda activate dl
+conda activate pianist-transformer
 python scripts/run_pipeline.py \
   --input sample.mp3 \
   --output-root assets/output \
@@ -462,13 +322,16 @@ python scripts/run_pipeline.py \
   --fluidsynth-lib-dir "$FLUIDSYNTH_LIB_DIR"
 ```
 
-and verify that these files exist:
+Expressive:
 
 ```bash
-ls assets/output/convert/sample.wav
-ls assets/output/raw/sample_basic_pitch.mid
-ls assets/output/clean/sample_clean.mid
-ls assets/output/rendered/sample.wav
+python scripts/run_pipeline.py \
+  --input sample.mp3 \
+  --output-root assets/output \
+  --soundfont "$SOUNDFONT" \
+  --fluidsynth-bin "$FLUIDSYNTH_BIN" \
+  --fluidsynth-lib-dir "$FLUIDSYNTH_LIB_DIR" \
+  --enable-pianist-transformer
 ```
 
-If all four files exist, the current MVP is working end-to-end.
+If both commands finish and the expected files exist, the single-environment workflow is ready.

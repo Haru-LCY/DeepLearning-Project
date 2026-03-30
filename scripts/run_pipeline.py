@@ -14,6 +14,7 @@ if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
 from src.audio_preprocess import preprocess_audio
+from src.expressive_render import build_expressive_output_paths, run_pianist_transformer
 from src.midi_cleanup import clean_midi
 from src.render import render_midi_to_wav
 from src.transcription import transcribe_audio
@@ -64,6 +65,47 @@ def parse_args() -> argparse.Namespace:
         type=float,
         help="Minimum note duration in seconds for MIDI cleanup.",
     )
+    parser.add_argument(
+        "--enable-pianist-transformer",
+        action="store_true",
+        help="Enable the optional PianistTransformer stage after MIDI cleanup.",
+    )
+    parser.add_argument(
+        "--pt-python",
+        default=None,
+        type=Path,
+        help="Optional path to the Python executable used for PianistTransformer. Defaults to the current interpreter.",
+    )
+    parser.add_argument(
+        "--pt-model-dir",
+        default=Path("PianistTransformer/models/sft"),
+        type=Path,
+        help="Path to the local PianistTransformer model directory.",
+    )
+    parser.add_argument(
+        "--pt-device",
+        default="auto",
+        choices=("auto", "cuda", "cpu"),
+        help="Execution device for PianistTransformer.",
+    )
+    parser.add_argument(
+        "--pt-temperature",
+        default=1.0,
+        type=float,
+        help="Sampling temperature for PianistTransformer.",
+    )
+    parser.add_argument(
+        "--pt-top-p",
+        default=0.95,
+        type=float,
+        help="Top-p sampling parameter for PianistTransformer.",
+    )
+    parser.add_argument(
+        "--pt-max-tempo",
+        default=300,
+        type=int,
+        help="Maximum tempo used when mapping the expressive MIDI back to score time.",
+    )
     return parser.parse_args()
 
 
@@ -75,12 +117,14 @@ def build_output_paths(output_root: Path, input_audio: Path) -> dict[str, Path]:
     clean_dir = output_root / "clean"
     rendered_dir = output_root / "rendered"
 
-    return {
+    outputs = {
         "preprocessed_audio": convert_dir / f"{stem}.wav",
         "raw_midi_dir": raw_dir,
         "cleaned_midi": clean_dir / f"{stem}_clean.mid",
         "rendered_wav": rendered_dir / f"{stem}.wav",
     }
+    outputs.update(build_expressive_output_paths(output_root=output_root, input_midi=outputs["cleaned_midi"]))
+    return outputs
 
 
 def configure_logging() -> None:
@@ -93,12 +137,13 @@ def main() -> None:
     configure_logging()
     args = parse_args()
     outputs = build_output_paths(output_root=args.output_root, input_audio=args.input)
+    total_stages = 5 if args.enable_pianist_transformer else 4
 
     LOGGER.info("Starting MVP pipeline")
     LOGGER.info("Input audio: %s", args.input)
     LOGGER.info("Output root: %s", args.output_root)
 
-    with tqdm(total=4, desc="Pipeline", unit="stage") as progress:
+    with tqdm(total=total_stages, desc="Pipeline", unit="stage") as progress:
         progress.set_description("Preprocessing audio")
         LOGGER.info(
             "Preprocessing audio to %s at %d Hz",
@@ -137,15 +182,39 @@ def main() -> None:
         )
         progress.update(1)
 
+        render_input_midi = cleaned_midi
+        expressive_raw_midi = None
+        expressive_mapped_midi = None
+        if args.enable_pianist_transformer:
+            progress.set_description("Expressive rendering")
+            LOGGER.info(
+                "Running PianistTransformer on %s using python %s",
+                cleaned_midi,
+                args.pt_python or Path(sys.executable),
+            )
+            expressive_raw_midi, expressive_mapped_midi = run_pianist_transformer(
+                input_midi=cleaned_midi,
+                output_raw_midi=outputs["raw_expressive_midi"],
+                output_mapped_midi=outputs["mapped_expressive_midi"],
+                pt_python=args.pt_python,
+                pt_model_dir=args.pt_model_dir,
+                device=args.pt_device,
+                temperature=args.pt_temperature,
+                top_p=args.pt_top_p,
+                max_tempo=args.pt_max_tempo,
+            )
+            render_input_midi = expressive_mapped_midi
+            progress.update(1)
+
         progress.set_description("Rendering WAV")
         LOGGER.info(
             "Rendering %s to %s using soundfont %s",
-            cleaned_midi,
+            render_input_midi,
             outputs["rendered_wav"],
             args.soundfont,
         )
         rendered_wav = render_midi_to_wav(
-            input_midi=cleaned_midi,
+            input_midi=render_input_midi,
             output_wav=outputs["rendered_wav"],
             soundfont_path=args.soundfont,
             fluidsynth_bin=args.fluidsynth_bin,
@@ -158,6 +227,9 @@ def main() -> None:
     print(f"preprocessed_audio: {preprocessed_audio}")
     print(f"raw_midi: {raw_midi}")
     print(f"cleaned_midi: {cleaned_midi}")
+    if expressive_raw_midi is not None and expressive_mapped_midi is not None:
+        print(f"raw_expressive_midi: {expressive_raw_midi}")
+        print(f"mapped_expressive_midi: {expressive_mapped_midi}")
     print(f"rendered_wav: {rendered_wav}")
 
 

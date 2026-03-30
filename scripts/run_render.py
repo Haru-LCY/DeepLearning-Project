@@ -16,7 +16,7 @@ from src.render import render_midi_to_wav
 def parse_args() -> argparse.Namespace:
     """Parse command-line arguments for MIDI rendering."""
     parser = argparse.ArgumentParser(
-        description="Render one cleaned MIDI file to one WAV file."
+        description="Render one MIDI file to one WAV file."
     )
     parser.add_argument("--input-midi", required=True, type=Path, help="Input MIDI path.")
     parser.add_argument("--output-wav", required=True, type=Path, help="Output WAV path.")

@@ -1,63 +1,66 @@
-# 指弹吉他音频转 MIDI MVP
+# 带可选 PianistTransformer 阶段的音频转 MIDI MVP
 
 英文版文档：`README.md`
 
-这个仓库是一个面向 Linux 的轻量级 MVP，用来把单轨指弹吉他音频转换成：
+这个仓库现在提供一条面向 Linux 的单文件符号音乐流程，可以把输入音频转换成：
 
-1. 一个转写得到的 MIDI 文件
-2. 一个钢琴音色渲染得到的 WAV 文件
+1. 转写得到的 MIDI
+2. 清理后的 MIDI
+3. 可选的 PianistTransformer 表情钢琴 MIDI
+4. 最终钢琴 WAV
 
-当前流程刻意保持简单、明确、易复现：
-
-1. 先把输入音频预处理成统一格式的 WAV
-2. 用 `basic-pitch` 把 WAV 转成原始 MIDI
-3. 用 `pretty_midi` 删除特别短的音符
-4. 用 `midi2audio` + `FluidSynth` 把清理后的 MIDI 渲染成 WAV
-
-当前仓库不包含：
-
-- 训练代码
-- MT3 集成
-- 批处理
-- 前端或 Web UI
+原始 baseline 流程仍然可以单独工作。现在默认推荐使用单一 `pianist-transformer` Python 环境来同时运行 baseline 和 PianistTransformer；如果你以后还想分环境，也仍然可以通过 `--pt-python` 显式指定另一个解释器。
 
 ## 当前状态
 
-这个 MVP 已经在 Linux 环境下完成端到端验证，当前使用的核心组件是：
+仓库现在支持基于 Python `3.11` 的单环境工作流，核心组件包括：
 
-- Python `3.10`
 - `basic-pitch`
 - `pretty_midi`
 - `midi2audio`
 - `FluidSynth`
-- 一个 GM `.sf2` soundfont
+- `PianistTransformer`
+- PyTorch `2.7.1` CUDA `11.8` 官方 wheel
 
-当前实现以 CPU 为主，不依赖 CUDA，也不依赖 GPU 专用库。即使服务器上有 A800，这一阶段也不需要用 GPU。
+推荐的服务器使用方式是：
+
+- 在 `pianist-transformer` 环境里直接跑完整 baseline pipeline
+- 需要表情钢琴渲染时，加 `--enable-pianist-transformer`
+- 默认使用当前 Python 解释器运行 PT 阶段
+
+即使系统 CUDA 比 `11.8` 更新，只要驱动足够新，官方 `cu118` wheel 仍然是稳定可用的方案。
 
 ## 流程概览
 
-输入：
+baseline 路径：
 
-- 单个音频文件路径，例如 `sample.mp3`
+1. 音频预处理成统一格式 WAV
+2. 用 `basic-pitch` 转成原始 MIDI
+3. 用 `pretty_midi` 清理过短音符
+4. 用 `midi2audio` + `FluidSynth` 渲染成 WAV
 
-输出：
+可选表情渲染路径：
 
-- 预处理后的 WAV：`assets/output/convert/<name>.wav`
-- 原始 MIDI：`assets/output/raw/<name>_basic_pitch.mid`
-- 清理后的 MIDI：`assets/output/clean/<name>_clean.mid`
-- 最终渲染 WAV：`assets/output/rendered/<name>.wav`
+1. 音频预处理
+2. 转写原始 MIDI
+3. MIDI cleanup
+4. 用 PianistTransformer 生成表情 raw MIDI
+5. 把表情 timing 映射回 score 对齐的 MIDI
+6. 用映射后的 MIDI 渲染 WAV
 
-主入口脚本是：
+默认输出位置：
 
-```bash
-python scripts/run_pipeline.py ...
-```
+- 预处理 WAV：`assets/output/convert/<stem>.wav`
+- 原始 MIDI：`assets/output/raw/<stem>_basic_pitch.mid`
+- 清理后 MIDI：`assets/output/clean/<stem>_clean.mid`
+- PT raw MIDI：`assets/output/expressive/raw/<stem>_pt_raw.mid`
+- PT mapped MIDI：`assets/output/expressive/mapped/<stem>_pt_mapped.mid`
+- 最终渲染 WAV：`assets/output/rendered/<stem>.wav`
 
-它会输出：
+主入口脚本：
 
-- `INFO` 日志
-- 4 个阶段的 `tqdm` 进度条
-- 最终生成文件路径
+- `python scripts/run_pipeline.py ...`
+- `python scripts/run_expressive_render.py ...`
 
 ## 项目结构
 
@@ -67,110 +70,99 @@ python scripts/run_pipeline.py ...
 ├── README.zh.md
 ├── environment.yml
 ├── requirements.txt
-├── .gitignore
+├── PianistTransformer/
 ├── configs/
-│   └── default.yaml
 ├── assets/
-│   ├── input/
-│   ├── output/
-│   │   ├── clean/
-│   │   ├── convert/
-│   │   ├── raw/
-│   │   └── rendered/
-│   └── soundfonts/
 ├── scripts/
 │   ├── run_cleanup_midi.py
+│   ├── run_expressive_render.py
 │   ├── run_pipeline.py
 │   ├── run_preprocess_audio.py
 │   ├── run_render.py
 │   └── run_transcription.py
 ├── src/
-│   ├── __init__.py
 │   ├── audio_preprocess.py
+│   ├── expressive_render.py
 │   ├── midi_cleanup.py
 │   ├── render.py
 │   ├── transcription.py
 │   └── utils.py
 └── tests/
-    └── test_smoke.py
 ```
 
-目录说明：
+关键目录说明：
 
-- `assets/input/`：可选，用来存放输入音频
-- `assets/output/convert/`：统一格式的单声道 `22050 Hz` WAV
+- `assets/output/convert/`：统一格式单声道 `22050 Hz` WAV
 - `assets/output/raw/`：`basic-pitch` 生成的原始 MIDI
-- `assets/output/clean/`：清理过短音符后的 MIDI
-- `assets/output/rendered/`：最终渲染得到的 WAV
-- `assets/soundfonts/`：soundfont 以及本地 `FluidSynth` 运行时资源
-- `scripts/`：用户直接运行的命令行脚本
-- `src/`：各阶段的实现模块
+- `assets/output/clean/`：清理后的 MIDI
+- `assets/output/expressive/raw/`：PianistTransformer 生成的 raw 表情 MIDI
+- `assets/output/expressive/mapped/`：默认用于渲染的 mapped/editable 表情 MIDI
+- `assets/output/rendered/`：最终 WAV 输出
 
 ## 环境搭建
 
-### 1. 创建环境
+### 推荐的单环境方案
 
-推荐直接使用：
+直接使用仓库提供的环境文件：
 
 ```bash
 conda env create -f environment.yml
-conda activate dl
+conda activate pianist-transformer
 ```
 
-如果你想手动创建，也可以：
+也可以手动创建：
 
 ```bash
-conda create -n dl python=3.10 pip -y
-conda activate dl
+conda create -n pianist-transformer python=3.11 pip -y
+conda activate pianist-transformer
 python -m pip install -r requirements.txt
 ```
 
 说明：
 
-- `environment.yml` 是推荐的复现入口
-- `requirements.txt` 里把 `numpy` 限制为 `<2`
-- 这么做是因为 `basic-pitch` 使用的 `tflite-runtime` 在 `numpy 2.x` 下可能报错
+- `requirements.txt` 现在同时包含 baseline 和 PianistTransformer 运行时依赖
+- `numpy<2` 仍然保留，用来保障 `basic-pitch` 兼容性
+- 文件里已经加入官方 PyTorch `cu118` 索引
+- 在 Python `3.11` 下，`basic-pitch` 往往会安装 TensorFlow 路线，而不是旧的 `tflite-runtime` 轻量路线
 
-如果 `conda` 还没初始化，需要先 source：
-
-```bash
-source /path/to/miniconda3/etc/profile.d/conda.sh
-conda activate dl
-```
-
-### 2. 验证 Python 依赖
+建议验证 import：
 
 ```bash
 python - <<'PY'
-import librosa
-import soundfile
 import basic_pitch
 import pretty_midi
 import midi2audio
+import librosa
+import soundfile
+import torch
+import transformers
+import accelerate
+import miditoolkit
+import partitura
 import numpy
 print("python_deps_ok")
+print(torch.__version__, torch.cuda.is_available(), torch.version.cuda)
+print(numpy.__version__)
 PY
 ```
 
 ## FluidSynth 和 SoundFont 准备
 
-渲染阶段依赖两个东西：
+渲染需要：
 
 1. `fluidsynth` 可执行文件
-2. 一个 `.sf2` soundfont 文件
+2. `.sf2` soundfont
 
-### 方案 A：直接使用仓库里已有的本地运行时
-
-如果你本地已经准备好了这些文件，可以直接用：
+仓库已经支持本地免 sudo 运行时布局：
 
 - soundfont：
   `assets/soundfonts/extracted/usr/share/sounds/sf2/FluidR3_GM.sf2`
 - FluidSynth 二进制：
   `assets/soundfonts/fluidsynth_pkg/usr/bin/fluidsynth`
-- 运行时库目录：
+- 运行时库：
   `assets/soundfonts/runtime_libs/usr/lib/x86_64-linux-gnu`
 
-建议先导出环境变量：
+建议导出：
 
 ```bash
 export SOUNDFONT=assets/soundfonts/extracted/usr/share/sounds/sf2/FluidR3_GM.sf2
@@ -178,62 +170,15 @@ export FLUIDSYNTH_BIN=assets/soundfonts/fluidsynth_pkg/usr/bin/fluidsynth
 export FLUIDSYNTH_LIB_DIR=$(pwd)/assets/soundfonts/runtime_libs/usr/lib/x86_64-linux-gnu
 ```
 
-### 方案 B：无 sudo 重建本地运行时
-
-如果这些文件不在仓库里，可以在 Ubuntu/Debian 风格系统上这样重建：
-
-```bash
-mkdir -p assets/soundfonts
-cd assets/soundfonts
-
-apt download fluid-soundfont-gm
-apt download fluidsynth
-apt download libfluidsynth3
-apt download libsdl2-2.0-0
-apt download libinstpatch-1.0-2
-apt download libdecor-0-0
-
-mkdir -p extracted fluidsynth_pkg runtime_libs
-
-dpkg-deb -x fluid-soundfont-gm_*.deb extracted
-dpkg-deb -x fluidsynth_*.deb fluidsynth_pkg
-
-for pkg in libfluidsynth3_*.deb libsdl2-2.0-0_*.deb libinstpatch-1.0-2_*.deb libdecor-0-0_*.deb; do
-  dpkg-deb -x "$pkg" runtime_libs
-done
-
-cd ../..
-```
-
-然后导出：
-
-```bash
-export SOUNDFONT=assets/soundfonts/extracted/usr/share/sounds/sf2/FluidR3_GM.sf2
-export FLUIDSYNTH_BIN=assets/soundfonts/fluidsynth_pkg/usr/bin/fluidsynth
-export FLUIDSYNTH_LIB_DIR=$(pwd)/assets/soundfonts/runtime_libs/usr/lib/x86_64-linux-gnu
-```
-
-### 3. 验证 FluidSynth 运行时
+快速检查：
 
 ```bash
 LD_LIBRARY_PATH="$FLUIDSYNTH_LIB_DIR" "$FLUIDSYNTH_BIN" --version
 ```
 
-预期输出中应该包含：
+## Baseline 一条命令跑通
 
-```text
-FluidSynth runtime version 2.x
-```
-
-## 快速开始
-
-假设你已经：
-
-- 激活了 `dl` 环境
-- 设置了 `SOUNDFONT`、`FLUIDSYNTH_BIN`、`FLUIDSYNTH_LIB_DIR`
-- 使用示例文件 `sample.mp3`
-
-那么直接运行：
+下面这条命令会在单一 `pianist-transformer` 环境里跑原始 4 阶段 pipeline：
 
 ```bash
 python scripts/run_pipeline.py \
@@ -244,71 +189,16 @@ python scripts/run_pipeline.py \
   --fluidsynth-lib-dir "$FLUIDSYNTH_LIB_DIR"
 ```
 
-预期生成：
+预期输出：
 
 - `assets/output/convert/sample.wav`
 - `assets/output/raw/sample_basic_pitch.mid`
 - `assets/output/clean/sample_clean.mid`
 - `assets/output/rendered/sample.wav`
 
-## 分阶段运行
+## 在主 pipeline 中启用 PianistTransformer
 
-### 1. 音频预处理
-
-```bash
-python scripts/run_preprocess_audio.py \
-  --input sample.mp3 \
-  --output assets/output/convert/sample.wav \
-  --sr 22050
-```
-
-作用：
-
-- 转单声道
-- 重采样到 `22050 Hz`
-- 写出标准 `.wav`
-
-### 2. 转写
-
-```bash
-python scripts/run_transcription.py \
-  --input assets/output/convert/sample.wav \
-  --output-dir assets/output/raw
-```
-
-预期输出：
-
-- `assets/output/raw/sample_basic_pitch.mid`
-
-### 3. MIDI cleanup
-
-```bash
-python scripts/run_cleanup_midi.py \
-  --input-midi assets/output/raw/sample_basic_pitch.mid \
-  --output-midi assets/output/clean/sample_clean.mid \
-  --min-note-duration 0.05
-```
-
-当前 cleanup 只做一件事：
-
-- 删除持续时间小于阈值的音符
-
-这一步也已经包含在 `scripts/run_pipeline.py` 里。
-
-### 4. 渲染
-
-```bash
-python scripts/run_render.py \
-  --input-midi assets/output/clean/sample_clean.mid \
-  --output-wav assets/output/rendered/sample_clean.wav \
-  --soundfont "$SOUNDFONT" \
-  --fluidsynth-bin "$FLUIDSYNTH_BIN" \
-  --fluidsynth-lib-dir "$FLUIDSYNTH_LIB_DIR"
-```
-
-## 一条命令跑完整流程
-
-队友在环境配置好后，最应该直接跑的是这条：
+加上这个开关即可启用表情渲染阶段：
 
 ```bash
 python scripts/run_pipeline.py \
@@ -316,141 +206,114 @@ python scripts/run_pipeline.py \
   --output-root assets/output \
   --soundfont "$SOUNDFONT" \
   --fluidsynth-bin "$FLUIDSYNTH_BIN" \
-  --fluidsynth-lib-dir "$FLUIDSYNTH_LIB_DIR"
+  --fluidsynth-lib-dir "$FLUIDSYNTH_LIB_DIR" \
+  --enable-pianist-transformer
 ```
 
-它会做：
+默认情况下，PT 阶段直接使用当前 Python 解释器，这就是推荐的单环境工作流。
 
-1. `sample.mp3 -> assets/output/convert/sample.wav`
-2. `sample.wav -> assets/output/raw/sample_basic_pitch.mid`
-3. `sample_basic_pitch.mid -> assets/output/clean/sample_clean.mid`
-4. `sample_clean.mid -> assets/output/rendered/sample.wav`
+可选 PT 参数：
 
-运行时会显示：
+- `--pt-python /path/to/python`
+- `--pt-model-dir PianistTransformer/models/sft`
+- `--pt-device auto|cuda|cpu`
+- `--pt-temperature 1.0`
+- `--pt-top-p 0.95`
+- `--pt-max-tempo 300`
 
-- 阶段日志
-- `tqdm` 进度条
-- 最终生成文件路径
+启用 PT 后，还会额外生成：
 
-## 仓库里的示例音频
+- `assets/output/expressive/raw/<stem>_pt_raw.mid`
+- `assets/output/expressive/mapped/<stem>_pt_mapped.mid`
 
-第一次建议直接用你自己的输入音频路径，例如：
+最终 WAV 默认使用 mapped 表情 MIDI 来渲染。
+
+## 单独运行表情渲染
+
+如果你已经有 cleanup 后的 MIDI，只想单独跑 PT 阶段：
 
 ```bash
-python scripts/run_pipeline.py \
-  --input /path/to/your/input.mp3 \
+python scripts/run_expressive_render.py \
+  --input-midi assets/output/clean/hoshi_clean.mid \
   --output-root assets/output \
+  --render \
   --soundfont "$SOUNDFONT" \
   --fluidsynth-bin "$FLUIDSYNTH_BIN" \
   --fluidsynth-lib-dir "$FLUIDSYNTH_LIB_DIR"
 ```
 
-## 配置文件说明
+它会生成：
 
-仓库里有一个占位配置文件：
+- `assets/output/expressive/raw/hoshi_pt_raw.mid`
+- `assets/output/expressive/mapped/hoshi_pt_mapped.mid`
+- `assets/output/rendered/hoshi_pt.wav`
 
-```text
-configs/default.yaml
+## Linux 和 Slurm 说明
+
+- 仓库面向 Linux
+- baseline 各阶段不要求 GPU
+- PianistTransformer 在有 GPU 时会更快
+- 某些集群上，普通 shell 里 `torch.cuda.is_available()` 可能是 `False`，但进入 Slurm allocation 后会变成 `True`
+
+如果你已经有一个交互式 GPU 作业，可以这样跑 PT：
+
+```bash
+srun --jobid=<your_jobid> --overlap bash -lc 'python scripts/run_expressive_render.py ...'
 ```
-
-当前脚本主要还是命令行参数驱动，`default.yaml` 目前更像是路径和默认值参考。
-
-当前包含的 key：
-
-- `input_audio`
-- `preprocess_output_dir`
-- `preprocessed_audio`
-- `transcription_output_dir`
-- `cleaned_midi_output_dir`
-- `render_output_dir`
-- `output_dir`
-- `soundfont_path`
-- `min_note_duration`
-- `preprocess_sample_rate`
-- `preprocess_mono`
-
-## Linux 说明
-
-- 当前 MVP 面向 Linux
-- 当前实现不依赖 CUDA
-- 当前实现不使用 GPU
-- 渲染依赖 `FluidSynth` 和有效的 `.sf2`
-- 如果你不用系统安装的 `FluidSynth`，需要同时传 `--fluidsynth-lib-dir`
-
-## 已知限制
-
-- 只支持单文件处理
-- 没有 batch 模式
-- 没有 MT3
-- 没有前端
-- 没有训练代码
-- cleanup 目前只删除过短音符
-- 渲染使用通用 GM soundfont，不是专门的吉他音色模型
 
 ## 常见问题
 
-### `basic-pitch` 报 NumPy / TFLite 错误
+### `basic-pitch` 因为 NumPy 兼容性报错
 
-执行：
+确保保持：
 
 ```bash
 python -m pip install "numpy<2"
 python -m pip install -r requirements.txt
 ```
 
+### import 时 TensorFlow 打印大量 CUDA/XLA 警告
+
+这是因为在统一的 Python `3.11` 环境里，`basic-pitch` 安装了 TensorFlow。日志会比较吵，但不一定代表 baseline 或 PT 阶段真的失败。
+
 ### 找不到 `basic-pitch`
 
 确认环境激活：
 
 ```bash
-conda activate dl
+conda activate pianist-transformer
 which basic-pitch
 ```
 
-### 找不到 `fluidsynth`
+### `fluidsynth` 或共享库缺失
 
-两种办法：
-
-- 系统级安装 `fluidsynth`
-- 用本文档里的本地运行时方案，并传 `--fluidsynth-bin`
-
-### 找不到 soundfont
-
-检查：
+请同时传：
 
 ```bash
-ls "$SOUNDFONT"
-```
-
-### 渲染时共享库报错
-
-如果你使用的是仓库里的本地 `FluidSynth` 运行时，请确认传了：
-
-```bash
+--fluidsynth-bin "$FLUIDSYNTH_BIN" \
 --fluidsynth-lib-dir "$FLUIDSYNTH_LIB_DIR"
 ```
 
-并且它指向：
+### PT 模型文件缺失
+
+本地模型目录必须包含：
+
+- `config.json`
+- `generation_config.json`
+- `model.safetensors`
+
+路径是：
 
 ```text
-assets/soundfonts/runtime_libs/usr/lib/x86_64-linux-gnu
+PianistTransformer/models/sft/
 ```
-
-### 流程跑得慢
-
-这是当前 MVP 的预期表现：
-
-- 转写走 CPU
-- MIDI 渲染对长音频也会花时间
-
-当前优先级是简单和可复现，不是速度。
 
 ## 最小验收清单
 
-队友完成环境配置后，应该能够运行：
+baseline：
 
 ```bash
-conda activate dl
+conda activate pianist-transformer
 python scripts/run_pipeline.py \
   --input sample.mp3 \
   --output-root assets/output \
@@ -459,13 +322,16 @@ python scripts/run_pipeline.py \
   --fluidsynth-lib-dir "$FLUIDSYNTH_LIB_DIR"
 ```
 
-然后确认这四个文件存在：
+表情渲染：
 
 ```bash
-ls assets/output/convert/sample.wav
-ls assets/output/raw/sample_basic_pitch.mid
-ls assets/output/clean/sample_clean.mid
-ls assets/output/rendered/sample.wav
+python scripts/run_pipeline.py \
+  --input sample.mp3 \
+  --output-root assets/output \
+  --soundfont "$SOUNDFONT" \
+  --fluidsynth-bin "$FLUIDSYNTH_BIN" \
+  --fluidsynth-lib-dir "$FLUIDSYNTH_LIB_DIR" \
+  --enable-pianist-transformer
 ```
 
-如果这四个文件都存在，说明当前 MVP 已经端到端跑通。
+如果两条命令都能完成并生成预期文件，说明单环境工作流已经可用。

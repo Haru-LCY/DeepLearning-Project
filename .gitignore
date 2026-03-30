@@ -23,9 +23,20 @@ assets/output/raw/*
 !assets/output/raw/.gitkeep
 assets/output/clean/*
 !assets/output/clean/.gitkeep
+assets/output/expressive/raw/*
+!assets/output/expressive/raw/.gitkeep
+assets/output/expressive/mapped/*
+!assets/output/expressive/mapped/.gitkeep
 assets/output/rendered/*
 !assets/output/rendered/.gitkeep
+assets/output_*/
 
 # Local soundfonts and extracted runtime assets
 assets/soundfonts/*
 !assets/soundfonts/.gitkeep
+
+# Local PianistTransformer model weights and generated data
+PianistTransformer/
+PianistTransformer/models/
+PianistTransformer/data/midis/testset/inference/
+PianistTransformer/data/processed/

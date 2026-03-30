@@ -1,3 +1,6 @@
+--extra-index-url https://download.pytorch.org/whl/cu118
+
+# Baseline audio-to-MIDI pipeline
 basic-pitch
 midi2audio
 pretty_midi
@@ -7,3 +10,15 @@ soundfile
 numpy<2
 pyyaml
 tqdm
+
+# PianistTransformer runtime for the single-environment workflow
+torch==2.7.1+cu118
+torchvision==0.22.1+cu118
+torchaudio==2.7.1+cu118
+transformers==4.54.0
+datasets==4.0.0
+accelerate==1.10.1
+miditoolkit==1.0.1
+partitura==1.7.0
+huggingface_hub==0.35.3
+safetensors
