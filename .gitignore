@@ -35,8 +35,10 @@ assets/output_*/
 assets/soundfonts/*
 !assets/soundfonts/.gitkeep
 
-# Local PianistTransformer model weights and generated data
-PianistTransformer/
+# Local PianistTransformer model weights and data artifacts
 PianistTransformer/models/
-PianistTransformer/data/midis/testset/inference/
-PianistTransformer/data/processed/
+PianistTransformer/data/
+!PianistTransformer/data/.gitkeep
+PianistTransformer/assets/
+!PianistTransformer/assets/
+!PianistTransformer/assets/gui.png
