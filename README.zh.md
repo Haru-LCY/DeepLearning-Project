@@ -1,337 +1,348 @@
-# 带可选 PianistTransformer 阶段的音频转 MIDI MVP
+# AI Cover + Pop2Piano 安装与运行指南
 
-英文版文档：`README.md`
+英文简要说明见 `README.md`。旧的 audio-to-MIDI / PianistTransformer 流程见 `docs/audio_to_midi_legacy.zh.md`。
 
-这个仓库现在提供一条面向 Linux 的单文件符号音乐流程，可以把输入音频转换成：
+这个仓库当前主线是 cover 工作流：输入一首歌，生成 DDSP-SVC 转换后的人声、Pop2Piano 钢琴伴奏，以及最终混音 WAV。
 
-1. 转写得到的 MIDI
-2. 清理后的 MIDI
-3. 可选的 PianistTransformer 表情钢琴 MIDI
-4. 最终钢琴 WAV
-
-原始 baseline 流程仍然可以单独工作。现在默认推荐使用单一 `pianist-transformer` Python 环境来同时运行 baseline 和 PianistTransformer；如果你以后还想分环境，也仍然可以通过 `--pt-python` 显式指定另一个解释器。
-
-## 当前状态
-
-仓库现在支持基于 Python `3.11` 的单环境工作流，核心组件包括：
-
-- `basic-pitch`
-- `pretty_midi`
-- `midi2audio`
-- `FluidSynth`
-- `PianistTransformer`
-- PyTorch `2.7.1` CUDA `11.8` 官方 wheel
-
-推荐的服务器使用方式是：
-
-- 在 `pianist-transformer` 环境里直接跑完整 baseline pipeline
-- 需要表情钢琴渲染时，加 `--enable-pianist-transformer`
-- 默认使用当前 Python 解释器运行 PT 阶段
-
-即使系统 CUDA 比 `11.8` 更新，只要驱动足够新，官方 `cu118` wheel 仍然是稳定可用的方案。
-
-## 流程概览
-
-baseline 路径：
-
-1. 音频预处理成统一格式 WAV
-2. 用 `basic-pitch` 转成原始 MIDI
-3. 用 `pretty_midi` 清理过短音符
-4. 用 `midi2audio` + `FluidSynth` 渲染成 WAV
-
-可选表情渲染路径：
-
-1. 音频预处理
-2. 转写原始 MIDI
-3. MIDI cleanup
-4. 用 PianistTransformer 生成表情 raw MIDI
-5. 把表情 timing 映射回 score 对齐的 MIDI
-6. 用映射后的 MIDI 渲染 WAV
-
-默认输出位置：
-
-- 预处理 WAV：`assets/output/convert/<stem>.wav`
-- 原始 MIDI：`assets/output/raw/<stem>_basic_pitch.mid`
-- 清理后 MIDI：`assets/output/clean/<stem>_clean.mid`
-- PT raw MIDI：`assets/output/expressive/raw/<stem>_pt_raw.mid`
-- PT mapped MIDI：`assets/output/expressive/mapped/<stem>_pt_mapped.mid`
-- 最终渲染 WAV：`assets/output/rendered/<stem>.wav`
-
-主入口脚本：
-
-- `python scripts/run_pipeline.py ...`
-- `python scripts/run_expressive_render.py ...`
-
-## 项目结构
-
-```text
-.
-├── README.md
-├── README.zh.md
-├── environment.yml
-├── requirements.txt
-├── PianistTransformer/
-├── configs/
-├── assets/
-├── scripts/
-│   ├── run_cleanup_midi.py
-│   ├── run_expressive_render.py
-│   ├── run_pipeline.py
-│   ├── run_preprocess_audio.py
-│   ├── run_render.py
-│   └── run_transcription.py
-├── src/
-│   ├── audio_preprocess.py
-│   ├── expressive_render.py
-│   ├── midi_cleanup.py
-│   ├── render.py
-│   ├── transcription.py
-│   └── utils.py
-└── tests/
-```
-
-关键目录说明：
-
-- `assets/output/convert/`：统一格式单声道 `22050 Hz` WAV
-- `assets/output/raw/`：`basic-pitch` 生成的原始 MIDI
-- `assets/output/clean/`：清理后的 MIDI
-- `assets/output/expressive/raw/`：PianistTransformer 生成的 raw 表情 MIDI
-- `assets/output/expressive/mapped/`：默认用于渲染的 mapped/editable 表情 MIDI
-- `assets/output/rendered/`：最终 WAV 输出
-
-## 环境搭建
-
-### 推荐的单环境方案
-
-直接使用仓库提供的环境文件：
+主入口：
 
 ```bash
-conda env create -f environment.yml
-conda activate pianist-transformer
+python scripts/run_ai_piano_cover.py ...
 ```
 
-也可以手动创建：
+## 工作流概览
+
+`scripts/run_ai_piano_cover.py` 会依次执行：
+
+1. 用 `ffmpeg` 把输入音频统一成 `44100 Hz` 双声道 WAV。
+2. 用 Demucs 分离 `vocals.wav` 和 `no_vocals.wav`。
+3. 用 DDSP-SVC 把人声转换成目标声线。
+4. 用 Pop2Piano 从原曲生成钢琴伴奏 MIDI。
+5. 用 FluidSynth + SoundFont 把钢琴 MIDI 渲染成 WAV。
+6. 用 `ffmpeg` 混合转换后人声和钢琴伴奏。
+
+默认输出目录是 `assets/output/cover/`：
+
+- `preprocessed/<stem>.wav`
+- `separated/<stem>_vocals.wav`
+- `separated/<stem>_no_vocals.wav`
+- `vocals/<stem>_ddsp_vocals.wav`
+- `piano/<stem>_pop2piano.mid`
+- `piano/<stem>_pop2piano.wav`
+- `final/<stem>_ai_cover_piano.wav`
+
+## 1. 克隆仓库
 
 ```bash
-conda create -n pianist-transformer python=3.11 pip -y
-conda activate pianist-transformer
-python -m pip install -r requirements.txt
+git clone <repo-url>
+cd DeepLearning-Project
 ```
 
-说明：
+这个仓库包含 vendor 代码目录，但大模型、音色和部分 runtime 文件不要提交到 GitHub。它们应通过外部拷贝、共享盘、release asset 或系统包安装准备。
 
-- `requirements.txt` 现在同时包含 baseline 和 PianistTransformer 运行时依赖
-- `numpy<2` 仍然保留，用来保障 `basic-pitch` 兼容性
-- 文件里已经加入官方 PyTorch `cu118` 索引
-- 在 Python `3.11` 下，`basic-pitch` 往往会安装 TensorFlow 路线，而不是旧的 `tflite-runtime` 轻量路线
+## 2. 创建 Conda 环境
 
-建议验证 import：
+cover 工作流只推荐使用 `environment.pianoformer-cover.yml`：
+
+```bash
+conda env create -f environment.pianoformer-cover.yml
+conda activate pianoformer-cover
+```
+
+确认环境可用：
 
 ```bash
 python - <<'PY'
-import basic_pitch
-import pretty_midi
-import midi2audio
-import librosa
-import soundfile
-import torch
-import transformers
-import accelerate
-import miditoolkit
-import partitura
-import numpy
-print("python_deps_ok")
-print(torch.__version__, torch.cuda.is_available(), torch.version.cuda)
-print(numpy.__version__)
+import torch, torchaudio, librosa, soundfile, yaml, transformers, pretty_midi, midi2audio
+print("imports_ok")
+print("torch:", torch.__version__)
+print("cuda_available:", torch.cuda.is_available())
+print("torch_cuda:", torch.version.cuda)
 PY
 ```
 
-## FluidSynth 和 SoundFont 准备
+目标机器推荐是 Linux + NVIDIA GPU。普通 shell 中 `torch.cuda.is_available()` 如果是 `False`，先确认当前 shell 是否真的拿到了 GPU；在集群环境里通常需要进入 GPU allocation 后再检查。
 
-渲染需要：
+## 3. 准备外部资源
 
-1. `fluidsynth` 可执行文件
-2. `.sf2` soundfont
+下面资源需要从已有机器外部拷贝到新机器，或者按各小节用系统包/联网方式准备。建议保持 README 中的相对路径，这样命令可以直接复用。
 
-仓库已经支持本地免 sudo 运行时布局：
+### 3.1 DDSP-SVC 和 Demucs
 
-- soundfont：
-  `assets/soundfonts/extracted/usr/share/sounds/sf2/FluidR3_GM.sf2`
-- FluidSynth 二进制：
-  `assets/soundfonts/fluidsynth_pkg/usr/bin/fluidsynth`
-- 运行时库：
-  `assets/soundfonts/runtime_libs/usr/lib/x86_64-linux-gnu`
+需要存在：
 
-建议导出：
-
-```bash
-export SOUNDFONT=assets/soundfonts/extracted/usr/share/sounds/sf2/FluidR3_GM.sf2
-export FLUIDSYNTH_BIN=assets/soundfonts/fluidsynth_pkg/usr/bin/fluidsynth
-export FLUIDSYNTH_LIB_DIR=$(pwd)/assets/soundfonts/runtime_libs/usr/lib/x86_64-linux-gnu
+```text
+third_party/ai_cover/demucs/
+third_party/ai_cover/DDSP-SVC/
+third_party/ai_cover/DDSP-SVC/exp/reflow-test/config.yaml
+third_party/ai_cover/DDSP-SVC/exp/reflow-test/model_30000.pt
+third_party/ai_cover/DDSP-SVC/pretrain/contentvec/checkpoint_best_legacy_500.pt
+third_party/ai_cover/DDSP-SVC/pretrain/rmvpe/model.pt
+third_party/ai_cover/DDSP-SVC/pretrain/pc_nsf_hifigan_44.1k_hop512_128bin_2025.02/config.json
+third_party/ai_cover/DDSP-SVC/pretrain/pc_nsf_hifigan_44.1k_hop512_128bin_2025.02/model.ckpt
 ```
 
-快速检查：
+当前代码默认使用：
+
+```text
+third_party/ai_cover/DDSP-SVC/exp/reflow-test/model_30000.pt
+```
+
+如果模型放在别处，运行时传：
+
+```bash
+--ddsp-model-ckpt /path/to/model_30000.pt
+```
+
+### 3.2 Pop2Piano 模型
+
+推荐把 Hugging Face 模型 `sweetcocoa/pop2piano` 外部拷贝到仓库内的本地目录，例如：
+
+```text
+models/pop2piano/sweetcocoa-pop2piano/
+```
+
+运行时显式传模型目录：
+
+```bash
+--pop2piano-model models/pop2piano/sweetcocoa-pop2piano
+```
+
+如果新机器能稳定访问 Hugging Face，也可以直接传：
+
+```bash
+--pop2piano-model sweetcocoa/pop2piano
+```
+
+### 3.3 FluidSynth 和 SoundFont
+
+渲染钢琴 WAV 需要两类资源：
+
+1. `fluidsynth` 可执行文件
+2. `.sf2` SoundFont 音色文件
+
+不要把 SoundFont、`.deb` 包、解压后的 runtime libs 提交到 GitHub；这些文件体积较大，也不是源码。推荐二选一准备。
+
+方案 A：从已有机器外部拷贝本地免 sudo 资源包，保持这个布局：
+
+```text
+assets/soundfonts/extracted/usr/share/sounds/sf2/FluidR3_GM.sf2
+assets/soundfonts/fluidsynth_pkg/usr/bin/fluidsynth
+assets/soundfonts/runtime_libs/usr/lib/x86_64-linux-gnu/
+```
+
+其中真正传给 `--soundfont` 的必须是 `.sf2` 文件：
+
+```text
+assets/soundfonts/extracted/usr/share/sounds/sf2/FluidR3_GM.sf2
+```
+
+不要误传成目录：
+
+```text
+assets/soundfonts/extracted/usr/share/sounds
+```
+
+方案 B：如果有 sudo 权限，也可以直接系统安装：
+
+```bash
+sudo apt-get update
+sudo apt-get install -y fluidsynth fluid-soundfont-gm
+```
+
+常见系统路径是：
+
+```text
+/usr/bin/fluidsynth
+/usr/share/sounds/sf2/FluidR3_GM.sf2
+```
+
+本仓库命令默认使用方案 A。先在仓库根目录导出路径，后面的命令都复用这三个变量：
+
+```bash
+export SOUNDFONT="$PWD/assets/soundfonts/extracted/usr/share/sounds/sf2/FluidR3_GM.sf2"
+export FLUIDSYNTH_BIN="$PWD/assets/soundfonts/fluidsynth_pkg/usr/bin/fluidsynth"
+export FLUIDSYNTH_LIB_DIR="$PWD/assets/soundfonts/runtime_libs/usr/lib/x86_64-linux-gnu"
+```
+
+不要手动把 `assets/soundfonts/extracted/usr/share/sounds/sf2/FluidR3_GM.sf2` 拆成两行输入；否则 shell 会把 `sf2/FluidR3_GM.sf2` 当成一个新命令执行。
+
+检查 FluidSynth：
 
 ```bash
 LD_LIBRARY_PATH="$FLUIDSYNTH_LIB_DIR" "$FLUIDSYNTH_BIN" --version
 ```
 
-## Baseline 一条命令跑通
+如果目标机器已经系统安装了 `fluidsynth`，也可以运行时只传系统 soundfont，或者省略 `--fluidsynth-bin`。
 
-下面这条命令会在单一 `pianist-transformer` 环境里跑原始 4 阶段 pipeline：
+## 4. 资源完整性检查
+
+在正式跑模型前，先确认关键文件存在：
 
 ```bash
-python scripts/run_pipeline.py \
-  --input sample.mp3 \
-  --output-root assets/output \
-  --soundfont "$SOUNDFONT" \
-  --fluidsynth-bin "$FLUIDSYNTH_BIN" \
-  --fluidsynth-lib-dir "$FLUIDSYNTH_LIB_DIR"
+test -f third_party/ai_cover/DDSP-SVC/exp/reflow-test/model_30000.pt
+test -f third_party/ai_cover/DDSP-SVC/exp/reflow-test/config.yaml
+test -f third_party/ai_cover/DDSP-SVC/pretrain/contentvec/checkpoint_best_legacy_500.pt
+test -f third_party/ai_cover/DDSP-SVC/pretrain/rmvpe/model.pt
+test -f third_party/ai_cover/DDSP-SVC/pretrain/pc_nsf_hifigan_44.1k_hop512_128bin_2025.02/model.ckpt
+test -f "$SOUNDFONT"
+test -x "$FLUIDSYNTH_BIN"
+test -d "$FLUIDSYNTH_LIB_DIR"
 ```
 
-预期输出：
-
-- `assets/output/convert/sample.wav`
-- `assets/output/raw/sample_basic_pitch.mid`
-- `assets/output/clean/sample_clean.mid`
-- `assets/output/rendered/sample.wav`
-
-## 在主 pipeline 中启用 PianistTransformer
-
-加上这个开关即可启用表情渲染阶段：
+再做一次 dry-run。dry-run 会打印每个阶段实际执行的命令，不会跑模型：
 
 ```bash
-python scripts/run_pipeline.py \
+python scripts/run_ai_piano_cover.py \
   --input sample.mp3 \
-  --output-root assets/output \
+  --device cuda \
+  --pop2piano-device cuda \
+  --pop2piano-model models/pop2piano/sweetcocoa-pop2piano \
   --soundfont "$SOUNDFONT" \
   --fluidsynth-bin "$FLUIDSYNTH_BIN" \
   --fluidsynth-lib-dir "$FLUIDSYNTH_LIB_DIR" \
-  --enable-pianist-transformer
+  --dry-run
 ```
 
-默认情况下，PT 阶段直接使用当前 Python 解释器，这就是推荐的单环境工作流。
+## 5. 正式运行
 
-可选 PT 参数：
-
-- `--pt-python /path/to/python`
-- `--pt-model-dir PianistTransformer/models/sft`
-- `--pt-device auto|cuda|cpu`
-- `--pt-temperature 1.0`
-- `--pt-top-p 0.95`
-- `--pt-max-tempo 300`
-
-启用 PT 后，还会额外生成：
-
-- `assets/output/expressive/raw/<stem>_pt_raw.mid`
-- `assets/output/expressive/mapped/<stem>_pt_mapped.mid`
-
-最终 WAV 默认使用 mapped 表情 MIDI 来渲染。
-
-## 单独运行表情渲染
-
-如果你已经有 cleanup 后的 MIDI，只想单独跑 PT 阶段：
+把输入音频放在仓库内或传绝对路径，然后运行：
 
 ```bash
-python scripts/run_expressive_render.py \
-  --input-midi assets/output/clean/hoshi_clean.mid \
-  --output-root assets/output \
-  --render \
+python scripts/run_ai_piano_cover.py \
+  --input sample.mp3 \
+  --output-root assets/output/cover \
+  --device cuda \
+  --pop2piano-device cuda \
+  --pop2piano-model models/pop2piano/sweetcocoa-pop2piano \
   --soundfont "$SOUNDFONT" \
   --fluidsynth-bin "$FLUIDSYNTH_BIN" \
   --fluidsynth-lib-dir "$FLUIDSYNTH_LIB_DIR"
 ```
 
-它会生成：
+成功后重点检查：
 
-- `assets/output/expressive/raw/hoshi_pt_raw.mid`
-- `assets/output/expressive/mapped/hoshi_pt_mapped.mid`
-- `assets/output/rendered/hoshi_pt.wav`
+```text
+assets/output/cover/final/sample_ai_cover_piano.wav
+```
 
-## Linux 和 Slurm 说明
-
-- 仓库面向 Linux
-- baseline 各阶段不要求 GPU
-- PianistTransformer 在有 GPU 时会更快
-- 某些集群上，普通 shell 里 `torch.cuda.is_available()` 可能是 `False`，但进入 Slurm allocation 后会变成 `True`
-
-如果你已经有一个交互式 GPU 作业，可以这样跑 PT：
+如果 GPU 显存不足，可以先把 Pop2Piano 放到 CPU：
 
 ```bash
-srun --jobid=<your_jobid> --overlap bash -lc 'python scripts/run_expressive_render.py ...'
+--pop2piano-device cpu
 ```
+
+如果整条链路都要 CPU smoke test：
+
+```bash
+python scripts/run_ai_piano_cover.py \
+  --input sample.mp3 \
+  --output-root assets/output/cover_cpu_test \
+  --device cpu \
+  --pop2piano-device cpu \
+  --pop2piano-model models/pop2piano/sweetcocoa-pop2piano \
+  --soundfont "$SOUNDFONT" \
+  --fluidsynth-bin "$FLUIDSYNTH_BIN" \
+  --fluidsynth-lib-dir "$FLUIDSYNTH_LIB_DIR"
+```
+
+CPU 可以用于验证安装，但速度会明显慢于 GPU。
+
+## 常用参数
+
+- `--input`: 输入音频路径，支持 `mp3/wav/flac` 等 `ffmpeg` 可读格式。
+- `--output-root`: cover 输出根目录，默认 `assets/output/cover`。
+- `--device`: Demucs 和 DDSP-SVC 使用的设备，`cuda` 或 `cpu`。
+- `--spk-id`: DDSP-SVC speaker id，默认 `1`。
+- `--key`: DDSP-SVC 半音移调，默认 `0`。
+- `--pitch-extractor`: DDSP-SVC pitch extractor，默认 `rmvpe`。
+- `--ddsp-model-ckpt`: DDSP-SVC checkpoint 路径。
+- `--pop2piano-model`: Pop2Piano Hugging Face id 或本地模型目录。
+- `--pop2piano-composer`: Pop2Piano composer token，默认 `composer1`。
+- `--pop2piano-device`: Pop2Piano 设备，`auto`、`cuda` 或 `cpu`。
+- `--pop2piano-max-length`: Pop2Piano 生成 token 上限，默认 `256`。
+- `--vocals-volume`: 最终混音人声音量，默认 `1.0`。
+- `--piano-volume`: 最终混音钢琴音量，默认 `1.0`。
 
 ## 常见问题
 
-### `basic-pitch` 因为 NumPy 兼容性报错
+### `torch.cuda.is_available()` 是 `False`
 
-确保保持：
+先确认目标机器有 NVIDIA driver，并且当前 shell 能看到 GPU：
 
 ```bash
-python -m pip install "numpy<2"
-python -m pip install -r requirements.txt
+nvidia-smi
 ```
 
-### import 时 TensorFlow 打印大量 CUDA/XLA 警告
+如果在 Slurm 或类似集群上，需要先进入 GPU job，再激活 conda 环境并运行命令。
 
-这是因为在统一的 Python `3.11` 环境里，`basic-pitch` 安装了 TensorFlow。日志会比较吵，但不一定代表 baseline 或 PT 阶段真的失败。
+### Pop2Piano 尝试联网下载
 
-### 找不到 `basic-pitch`
-
-确认环境激活：
+如果 `--pop2piano-model` 指向本地存在的目录，脚本会设置离线环境变量并清理 proxy。确认路径写对：
 
 ```bash
-conda activate pianist-transformer
-which basic-pitch
+test -d models/pop2piano/sweetcocoa-pop2piano
 ```
 
-### `fluidsynth` 或共享库缺失
+### DDSP-SVC 报缺少 checkpoint
 
-请同时传：
+确认 `config.yaml` 里引用的 encoder 和 vocoder 路径都存在。当前默认配置需要：
+
+```text
+pretrain/contentvec/checkpoint_best_legacy_500.pt
+pretrain/pc_nsf_hifigan_44.1k_hop512_128bin_2025.02/model.ckpt
+pretrain/pc_nsf_hifigan_44.1k_hop512_128bin_2025.02/config.json
+```
+
+### FluidSynth 或共享库缺失
+
+优先传完整三件套，并确保 `--soundfont` 是 `.sf2` 文件路径：
 
 ```bash
+--soundfont "$SOUNDFONT" \
 --fluidsynth-bin "$FLUIDSYNTH_BIN" \
 --fluidsynth-lib-dir "$FLUIDSYNTH_LIB_DIR"
 ```
 
-### PT 模型文件缺失
+也可以在系统层安装 FluidSynth 和 SoundFont 后，改用系统路径。
 
-本地模型目录必须包含：
-
-- `config.json`
-- `generation_config.json`
-- `model.safetensors`
-
-路径是：
+如果报：
 
 ```text
-PianistTransformer/models/sft/
+SoundFont path is not a file
 ```
 
-## 最小验收清单
-
-baseline：
+说明传入的路径不是 `.sf2` 文件。检查：
 
 ```bash
-conda activate pianist-transformer
-python scripts/run_pipeline.py \
-  --input sample.mp3 \
-  --output-root assets/output \
-  --soundfont "$SOUNDFONT" \
-  --fluidsynth-bin "$FLUIDSYNTH_BIN" \
-  --fluidsynth-lib-dir "$FLUIDSYNTH_LIB_DIR"
+find assets/soundfonts -type f -name '*.sf2' -print
 ```
 
-表情渲染：
+当前推荐路径是：
+
+```text
+assets/soundfonts/extracted/usr/share/sounds/sf2/FluidR3_GM.sf2
+```
+
+### `ffmpeg` 报动态库错误
+
+`environment.pianoformer-cover.yml` 已包含 conda 版 `ffmpeg`。确认正在使用 `pianoformer-cover` 环境：
 
 ```bash
-python scripts/run_pipeline.py \
-  --input sample.mp3 \
-  --output-root assets/output \
-  --soundfont "$SOUNDFONT" \
-  --fluidsynth-bin "$FLUIDSYNTH_BIN" \
-  --fluidsynth-lib-dir "$FLUIDSYNTH_LIB_DIR" \
-  --enable-pianist-transformer
+which ffmpeg
+ffmpeg -version
 ```
 
-如果两条命令都能完成并生成预期文件，说明单环境工作流已经可用。
+### Demucs 首次运行慢
+
+Demucs 可能需要加载或缓存模型。GPU 机器上建议保留默认：
+
+```bash
+--device cuda
+```
+
+显存不足时再改成：
+
+```bash
+--device cpu
+```

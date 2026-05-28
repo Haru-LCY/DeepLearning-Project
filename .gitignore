@@ -10,25 +10,39 @@ env/
 *.wav.tmp
 *.flac.tmp
 *.log
+plan.md
 
 # Local input audio
 assets/input/*
 !assets/input/.gitkeep
 *.mp3
 
+# Local copied model assets
+models/
+
 # Generated pipeline outputs
+assets/output/*
+!assets/output/convert/
 assets/output/convert/*
 !assets/output/convert/.gitkeep
+!assets/output/raw/
 assets/output/raw/*
 !assets/output/raw/.gitkeep
+!assets/output/clean/
 assets/output/clean/*
 !assets/output/clean/.gitkeep
+!assets/output/expressive/
+assets/output/expressive/*
+!assets/output/expressive/raw/
 assets/output/expressive/raw/*
 !assets/output/expressive/raw/.gitkeep
+!assets/output/expressive/mapped/
 assets/output/expressive/mapped/*
 !assets/output/expressive/mapped/.gitkeep
+!assets/output/rendered/
 assets/output/rendered/*
 !assets/output/rendered/.gitkeep
+assets/output/cover/*
 assets/output_*/
 
 # Local soundfonts and extracted runtime assets
@@ -42,3 +56,7 @@ PianistTransformer/data/
 PianistTransformer/assets/
 !PianistTransformer/assets/
 !PianistTransformer/assets/gui.png
+
+node_modules/
+package-lock.json
+package.json
