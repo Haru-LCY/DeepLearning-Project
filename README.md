@@ -10,6 +10,14 @@ Main entry point:
 python scripts/run_ai_piano_cover.py ...
 ```
 
+FastAPI backend entry point:
+
+```bash
+uvicorn backend.main:app --host 0.0.0.0 --port 8000
+```
+
+Backend role/API config lives in `configs/roles.yaml`.
+
 ## Quick Setup
 
 Use the cover environment:

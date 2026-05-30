@@ -265,6 +265,62 @@ CPU 可以用于验证安装，但速度会明显慢于 GPU。
 - `--vocals-volume`: 最终混音人声音量，默认 `1.0`。
 - `--piano-volume`: 最终混音钢琴音量，默认 `1.0`。
 
+## 后端 API
+
+CLI 入口仍然保留。前端联调用 FastAPI 后端：
+
+```bash
+uvicorn backend.main:app --host 0.0.0.0 --port 8000
+```
+
+后端启动时会读取 `configs/roles.yaml`，并按 exp 目录下已有的 8 个 DDSP checkpoint 做角色列表。默认 `preload_mode: torch_cpu` 会在启动时把 8 个 DDSP checkpoint 读入 CPU 内存，并校验 Demucs、Pop2Piano、SoundFont 和 FluidSynth 资源。如果只想做资源校验、不预读权重，可以设置：
+
+```bash
+export COVER_PRELOAD_MODE=validate
+```
+
+常用接口：
+
+```text
+GET  /api/health
+GET  /api/config
+GET  /api/models/status
+POST /api/jobs
+GET  /api/jobs/{job_id}
+GET  /api/jobs/{job_id}/events
+POST /api/jobs/{job_id}/cancel
+POST /api/jobs/{job_id}/remix
+GET  /api/jobs/{job_id}/files/input
+GET  /api/jobs/{job_id}/files/vocals
+GET  /api/jobs/{job_id}/files/piano
+GET  /api/jobs/{job_id}/files/final
+```
+
+提交任务使用 `multipart/form-data`：
+
+```text
+audio: File
+role_id: amoris
+key: 0
+vocals_volume: 1.0
+piano_volume: 1.0
+```
+
+前端进度推送使用 SSE 连接：
+
+```text
+GET /api/jobs/{job_id}/events
+```
+
+只调整第四阶段音量时调用 remix，不会重跑分离、翻唱和 piano cover：
+
+```http
+POST /api/jobs/{job_id}/remix
+Content-Type: application/json
+
+{"vocals_volume": 0.9, "piano_volume": 0.6}
+```
+
 ## 常见问题
 
 ### `torch.cuda.is_available()` 是 `False`

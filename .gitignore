@@ -43,6 +43,11 @@ assets/output/expressive/mapped/*
 assets/output/rendered/*
 !assets/output/rendered/.gitkeep
 assets/output/cover/*
+!assets/output/jobs/
+assets/output/jobs/*
+!assets/output/jobs/.gitkeep
+assets/uploads/*
+!assets/uploads/.gitkeep
 assets/output_*/
 
 # Local soundfonts and extracted runtime assets

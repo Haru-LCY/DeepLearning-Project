@@ -10,6 +10,9 @@ soundfile
 numpy<2
 pyyaml
 tqdm
+fastapi
+uvicorn[standard]
+python-multipart
 
 # PianistTransformer runtime for the single-environment workflow
 torch==2.7.1+cu118

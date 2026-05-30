@@ -10,6 +10,7 @@ import shlex
 import shutil
 import subprocess
 import sys
+from typing import Callable
 
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
@@ -29,6 +30,7 @@ DEFAULT_POP2PIANO_MODEL = (
 DEFAULT_SOUNDFONT = REPO_ROOT / "assets" / "soundfonts" / "extracted" / "usr" / "share" / "sounds" / "sf2" / "FluidR3_GM.sf2"
 DEFAULT_FLUIDSYNTH_BIN = REPO_ROOT / "assets" / "soundfonts" / "fluidsynth_pkg" / "usr" / "bin" / "fluidsynth"
 DEFAULT_FLUIDSYNTH_LIB_DIR = REPO_ROOT / "assets" / "soundfonts" / "runtime_libs" / "usr" / "lib" / "x86_64-linux-gnu"
+ProgressCallback = Callable[[str, int, str], None]
 
 
 @dataclass(frozen=True)
@@ -86,6 +88,16 @@ def _run(spec: CommandSpec, dry_run: bool = False) -> None:
     if dry_run:
         return
     subprocess.run(spec.argv, cwd=spec.cwd, env=_merged_env(spec.env), check=True)
+
+
+def _emit_progress(
+    progress_callback: ProgressCallback | None,
+    stage_name: str,
+    progress: int,
+    message: str,
+) -> None:
+    if progress_callback is not None:
+        progress_callback(stage_name, progress, message)
 
 
 def _ffmpeg_runtime_env() -> dict[str, str] | None:
@@ -289,6 +301,12 @@ def build_mix_command(
     vocals_volume: float,
     piano_volume: float,
 ) -> CommandSpec:
+    for name, value in (("vocals_volume", vocals_volume), ("piano_volume", piano_volume)):
+        if not math.isfinite(value):
+            raise ValueError(f"{name} must be a finite number.")
+        if value < 0:
+            raise ValueError(f"{name} must be greater than or equal to 0.")
+
     filter_complex = (
         f"[0:a]aresample=44100,aformat=sample_fmts=fltp:channel_layouts=stereo,volume={vocals_volume}[vocals];"
         f"[1:a]aresample=44100,aformat=sample_fmts=fltp:channel_layouts=stereo,volume={piano_volume}[piano];"
@@ -319,6 +337,29 @@ def build_mix_command(
     )
 
 
+def mix_cover_audio(
+    vocals_audio: Path,
+    piano_audio: Path,
+    output_audio: Path,
+    vocals_volume: float = 1.0,
+    piano_volume: float = 1.0,
+    dry_run: bool = False,
+) -> Path:
+    if not dry_run:
+        output_audio.parent.mkdir(parents=True, exist_ok=True)
+    _run(
+        build_mix_command(
+            vocals_audio=vocals_audio,
+            piano_audio=piano_audio,
+            output_audio=output_audio,
+            vocals_volume=vocals_volume,
+            piano_volume=piano_volume,
+        ),
+        dry_run=dry_run,
+    )
+    return output_audio
+
+
 def run_ai_piano_cover(
     input_audio: Path,
     output_root: Path,
@@ -338,6 +379,7 @@ def run_ai_piano_cover(
     fluidsynth_bin: Path = DEFAULT_FLUIDSYNTH_BIN,
     fluidsynth_lib_dir: Path = DEFAULT_FLUIDSYNTH_LIB_DIR,
     dry_run: bool = False,
+    progress_callback: ProgressCallback | None = None,
 ) -> CoverArtifacts:
     input_audio = input_audio.resolve()
     output_root = output_root.resolve()
@@ -373,6 +415,7 @@ def run_ai_piano_cover(
     print(f"Output root: {output_root}")
     print(f"Final mix: {artifacts.final_mix}")
     print("")
+    _emit_progress(progress_callback, "preprocess", 0, "Starting audio preprocessing")
 
     print("Stage 0: preprocess audio")
     if pre_pitch_shift != 0.0:
@@ -385,6 +428,7 @@ def run_ai_piano_cover(
         ),
         dry_run=dry_run,
     )
+    _emit_progress(progress_callback, "separate_vocals", 10, "Preprocessed audio")
 
     print("")
     print("Stage 1: separate vocals with Demucs")
@@ -393,9 +437,11 @@ def run_ai_piano_cover(
         copy_demucs_outputs(artifacts.preprocessed_audio, raw_demucs_root, artifacts)
         print(f"Vocals: {artifacts.vocals}")
         print(f"No vocals: {artifacts.no_vocals}")
+    _emit_progress(progress_callback, "separate_vocals", 25, "Separated vocals and accompaniment")
 
     print("")
     print("Stage 2: convert vocals with DDSP-SVC")
+    _emit_progress(progress_callback, "voice_conversion", 30, "Starting voice conversion")
     _run(
         build_ddsp_command(
             input_vocals=artifacts.vocals,
@@ -409,9 +455,11 @@ def run_ai_piano_cover(
         ),
         dry_run=dry_run,
     )
+    _emit_progress(progress_callback, "voice_conversion", 50, "Converted vocals")
 
     print("")
     print("Stage 3: generate Pop2Piano accompaniment")
+    _emit_progress(progress_callback, "piano_cover", 55, "Starting piano cover generation")
     pop2piano_input_audio = artifacts.preprocessed_audio if pre_pitch_shift != 0.0 else input_audio
     _run(
         build_pop2piano_command(
@@ -425,6 +473,7 @@ def run_ai_piano_cover(
         ),
         dry_run=dry_run,
     )
+    _emit_progress(progress_callback, "piano_cover", 72, "Generated piano MIDI")
 
     print("")
     print("Stage 4: render piano MIDI to WAV")
@@ -441,18 +490,19 @@ def run_ai_piano_cover(
         print(f"Piano WAV: {artifacts.piano_wav}")
     else:
         print(f"Would render {artifacts.piano_midi} -> {artifacts.piano_wav}")
+    _emit_progress(progress_callback, "piano_cover", 85, "Rendered piano audio")
 
     print("")
     print("Stage 5: mix DDSP vocals with piano accompaniment")
-    _run(
-        build_mix_command(
-            vocals_audio=artifacts.ddsp_vocals,
-            piano_audio=artifacts.piano_wav,
-            output_audio=artifacts.final_mix,
-            vocals_volume=vocals_volume,
-            piano_volume=piano_volume,
-        ),
+    _emit_progress(progress_callback, "merge", 90, "Starting final mix")
+    mix_cover_audio(
+        vocals_audio=artifacts.ddsp_vocals,
+        piano_audio=artifacts.piano_wav,
+        output_audio=artifacts.final_mix,
+        vocals_volume=vocals_volume,
+        piano_volume=piano_volume,
         dry_run=dry_run,
     )
+    _emit_progress(progress_callback, "completed", 100, "Cover pipeline completed")
 
     return artifacts
