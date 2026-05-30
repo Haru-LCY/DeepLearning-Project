@@ -18,7 +18,7 @@ class RoleStatus:
     name: str
     checkpoint: Path
     spk_id: int
-    default_key: int
+    default_pre_pitch_shift: int
     avatar: str | None
     ready: bool
     loaded: bool
@@ -81,7 +81,7 @@ class ModelRegistry:
         return {
             "roles": [self._public_role(status) for status in self.role_status.values()],
             "constraints": {
-                "key": {"min": runtime.key_min, "max": runtime.key_max, "step": 1},
+                "pre_pitch_shift": {"min": runtime.pre_pitch_shift_min, "max": runtime.pre_pitch_shift_max, "step": 1},
                 "vocals_volume": {"min": runtime.volume_min, "max": runtime.volume_max, "step": 0.05, "default": 1.0},
                 "piano_volume": {"min": runtime.volume_min, "max": runtime.volume_max, "step": 0.05, "default": 1.0},
             },
@@ -160,7 +160,7 @@ class ModelRegistry:
             name=role.name,
             checkpoint=role.ddsp_model_ckpt,
             spk_id=role.spk_id,
-            default_key=role.default_key,
+            default_pre_pitch_shift=role.default_pre_pitch_shift,
             avatar=role.avatar,
             ready=ready,
             loaded=loaded,
@@ -181,7 +181,7 @@ class ModelRegistry:
             "id": status.id,
             "name": status.name,
             "avatar": status.avatar,
-            "default_key": status.default_key,
+            "default_pre_pitch_shift": status.default_pre_pitch_shift,
             "ready": status.ready,
             "loaded": status.loaded,
             "error": status.error,

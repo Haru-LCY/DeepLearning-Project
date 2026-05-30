@@ -81,13 +81,13 @@ async def models_status() -> dict:
 async def create_job(
     audio: UploadFile = File(...),
     role_id: str = Form(...),
-    key: int = Form(0),
+    pre_pitch_shift: int = Form(0),
     vocals_volume: float = Form(1.0),
     piano_volume: float = Form(1.0),
 ) -> dict:
     registry: ModelRegistry = app.state.registry
     manager: JobManager = app.state.jobs
-    _validate_job_params(registry, role_id, key, vocals_volume, piano_volume)
+    _validate_job_params(registry, role_id, pre_pitch_shift, vocals_volume, piano_volume)
 
     suffix = _validated_audio_suffix(audio.filename)
     job_id = manager.create_job_id()
@@ -102,7 +102,7 @@ async def create_job(
 
     params = JobParams(
         role_id=role_id,
-        key=key,
+        pre_pitch_shift=pre_pitch_shift,
         vocals_volume=vocals_volume,
         piano_volume=piano_volume,
         original_filename=audio.filename,
@@ -190,7 +190,7 @@ async def get_job_file(job_id: str, kind: str) -> FileResponse:
 def _validate_job_params(
     registry: ModelRegistry,
     role_id: str,
-    key: int,
+    pre_pitch_shift: int,
     vocals_volume: float,
     piano_volume: float,
 ) -> None:
@@ -202,8 +202,11 @@ def _validate_job_params(
         raise HTTPException(status_code=409, detail=str(exc)) from exc
 
     runtime = registry.runtime
-    if key < runtime.key_min or key > runtime.key_max:
-        raise HTTPException(status_code=400, detail=f"key must be between {runtime.key_min} and {runtime.key_max}")
+    if pre_pitch_shift < runtime.pre_pitch_shift_min or pre_pitch_shift > runtime.pre_pitch_shift_max:
+        raise HTTPException(
+            status_code=400,
+            detail=f"pre_pitch_shift must be between {runtime.pre_pitch_shift_min} and {runtime.pre_pitch_shift_max}",
+        )
     _validate_volume(registry, vocals_volume, "vocals_volume")
     _validate_volume(registry, piano_volume, "piano_volume")
 

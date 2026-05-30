@@ -24,7 +24,7 @@ class RoleConfig:
     name: str
     ddsp_model_ckpt: Path
     spk_id: int = 1
-    default_key: int = 0
+    default_pre_pitch_shift: int = 0
     avatar: str | None = None
 
 
@@ -44,8 +44,8 @@ class RuntimeConfig:
     pre_pitch_shift: float
     preload_mode: str
     require_ready_models: bool
-    key_min: int
-    key_max: int
+    pre_pitch_shift_min: int
+    pre_pitch_shift_max: int
     volume_min: float
     volume_max: float
     cors_origins: list[str]
@@ -110,8 +110,8 @@ def _runtime_from_dict(data: dict[str, Any]) -> RuntimeConfig:
         pre_pitch_shift=float(os.environ.get("COVER_PRE_PITCH_SHIFT", data.get("pre_pitch_shift", 0.0))),
         preload_mode=os.environ.get("COVER_PRELOAD_MODE", data.get("preload_mode", "validate")),
         require_ready_models=_env_bool("COVER_REQUIRE_READY_MODELS", bool(data.get("require_ready_models", False))),
-        key_min=int(os.environ.get("COVER_KEY_MIN", constraints.get("key", {}).get("min", -12))),
-        key_max=int(os.environ.get("COVER_KEY_MAX", constraints.get("key", {}).get("max", 12))),
+        pre_pitch_shift_min=int(os.environ.get("COVER_PRE_PITCH_SHIFT_MIN", constraints.get("pre_pitch_shift", {}).get("min", -12))),
+        pre_pitch_shift_max=int(os.environ.get("COVER_PRE_PITCH_SHIFT_MAX", constraints.get("pre_pitch_shift", {}).get("max", 12))),
         volume_min=float(os.environ.get("COVER_VOLUME_MIN", constraints.get("volume", {}).get("min", 0.0))),
         volume_max=float(os.environ.get("COVER_VOLUME_MAX", constraints.get("volume", {}).get("max", 2.0))),
         cors_origins=_env_list("COVER_CORS_ORIGINS", data.get("cors_origins", ["*"])),
@@ -136,7 +136,7 @@ def load_backend_config(config_path: Path | None = None) -> BackendConfig:
             name=str(item.get("name", item["id"])),
             ddsp_model_ckpt=_resolve_path(item["ddsp_model_ckpt"]),
             spk_id=int(item.get("spk_id", 1)),
-            default_key=int(item.get("default_key", 0)),
+            default_pre_pitch_shift=int(item.get("default_pre_pitch_shift", 0)),
             avatar=item.get("avatar"),
         )
         for item in role_items

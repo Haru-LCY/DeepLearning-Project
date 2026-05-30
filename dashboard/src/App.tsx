@@ -49,7 +49,7 @@ type Role = {
   id: string
   name: string
   avatar?: string | null
-  default_key: number
+  default_pre_pitch_shift: number
   ready: boolean
   loaded: boolean
   error?: string | null
@@ -58,7 +58,7 @@ type Role = {
 type BackendConfig = {
   roles: Role[]
   constraints: {
-    key: { min: number; max: number; step: number }
+    pre_pitch_shift: { min: number; max: number; step: number }
     vocals_volume: { min: number; max: number; step: number; default: number }
     piano_volume: { min: number; max: number; step: number; default: number }
   }
@@ -76,7 +76,7 @@ type Job = {
   message: string
   params: {
     role_id: string
-    key: number
+    pre_pitch_shift: number
     vocals_volume: number
     piano_volume: number
     original_filename?: string | null
@@ -93,17 +93,17 @@ type Job = {
 
 const FALLBACK_CONFIG: BackendConfig = {
   roles: [
-    { id: "amoris", name: "Amoris", default_key: 0, ready: false, loaded: false },
-    { id: "anon", name: "Anon", default_key: 0, ready: false, loaded: false },
-    { id: "doloris", name: "Doloris", default_key: 0, ready: false, loaded: false },
-    { id: "mortis", name: "Mortis", default_key: 0, ready: false, loaded: false },
-    { id: "soyo", name: "Soyo", default_key: 0, ready: false, loaded: false },
-    { id: "taki", name: "Taki", default_key: 0, ready: false, loaded: false },
-    { id: "tomorin", name: "Tomorin", default_key: 0, ready: false, loaded: false },
-    { id: "oblivionis", name: "Oblivionis", default_key: 0, ready: false, loaded: false },
+    { id: "amoris", name: "Amoris", default_pre_pitch_shift: 0, ready: false, loaded: false },
+    { id: "anon", name: "Anon", default_pre_pitch_shift: 0, ready: false, loaded: false },
+    { id: "doloris", name: "Doloris", default_pre_pitch_shift: 0, ready: false, loaded: false },
+    { id: "mortis", name: "Mortis", default_pre_pitch_shift: 0, ready: false, loaded: false },
+    { id: "soyo", name: "Soyo", default_pre_pitch_shift: 0, ready: false, loaded: false },
+    { id: "taki", name: "Taki", default_pre_pitch_shift: 0, ready: false, loaded: false },
+    { id: "tomorin", name: "Tomorin", default_pre_pitch_shift: 0, ready: false, loaded: false },
+    { id: "oblivionis", name: "Oblivionis", default_pre_pitch_shift: 0, ready: false, loaded: false },
   ],
   constraints: {
-    key: { min: -12, max: 12, step: 1 },
+    pre_pitch_shift: { min: -12, max: 12, step: 1 },
     vocals_volume: { min: 0, max: 2, step: 0.05, default: 1 },
     piano_volume: { min: 0, max: 2, step: 0.05, default: 1 },
   },
@@ -161,7 +161,7 @@ function App() {
         const firstReadyRole = nextConfig.roles.find((role) => role.ready)
         if (firstReadyRole) {
           setSelectedRole(firstReadyRole.id)
-          setKeyShift([firstReadyRole.default_key])
+          setKeyShift([firstReadyRole.default_pre_pitch_shift])
         }
       } catch {
         if (!controller.signal.aborted) {
@@ -219,7 +219,7 @@ function App() {
       const formData = new FormData()
       formData.append("audio", audioFile)
       formData.append("role_id", selectedRole)
-      formData.append("key", String(keyShift[0]))
+      formData.append("pre_pitch_shift", String(keyShift[0]))
       formData.append("vocals_volume", String(vocalsVolume[0]))
       formData.append("piano_volume", String(pianoVolume[0]))
 
@@ -329,7 +329,7 @@ function App() {
                   onChange={(roleId) => {
                     const role = config.roles.find((item) => item.id === roleId)
                     setSelectedRole(roleId)
-                    setKeyShift([role?.default_key ?? 0])
+                    setKeyShift([role?.default_pre_pitch_shift ?? 0])
                   }}
                   disabled={isRunning}
                 />
@@ -582,13 +582,13 @@ function ControlPanel(props: ControlPanelProps) {
           <ParameterSlider
             label="升降 Key"
             value={keyShift}
-            min={constraints.key.min}
-            max={constraints.key.max}
-            step={constraints.key.step}
+            min={constraints.pre_pitch_shift.min}
+            max={constraints.pre_pitch_shift.max}
+            step={constraints.pre_pitch_shift.step}
             marks={[
-              { value: constraints.key.min, label: String(constraints.key.min) },
+              { value: constraints.pre_pitch_shift.min, label: String(constraints.pre_pitch_shift.min) },
               { value: 0, label: "0" },
-              { value: constraints.key.max, label: `+${constraints.key.max}` },
+              { value: constraints.pre_pitch_shift.max, label: `+${constraints.pre_pitch_shift.max}` },
             ]}
             valueText={`${formatSigned(keyShift[0])} semitones`}
             colorPalette="purple"

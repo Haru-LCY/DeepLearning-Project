@@ -3,49 +3,49 @@ roles:
     name: Amoris
     ddsp_model_ckpt: third_party/ai_cover/DDSP-SVC/exp/reflow-test-amoris/model_14000.pt
     spk_id: 1
-    default_key: 0
+    default_pre_pitch_shift: 0
 
   - id: anon
     name: Anon
     ddsp_model_ckpt: third_party/ai_cover/DDSP-SVC/exp/reflow-test-anon/model_12000.pt
     spk_id: 1
-    default_key: 0
+    default_pre_pitch_shift: 0
 
   - id: doloris
     name: Doloris
     ddsp_model_ckpt: third_party/ai_cover/DDSP-SVC/exp/reflow-test-doloris/model_28000.pt
     spk_id: 1
-    default_key: 0
+    default_pre_pitch_shift: 0
 
   - id: mortis
     name: Mortis
     ddsp_model_ckpt: third_party/ai_cover/DDSP-SVC/exp/reflow-test-mortis/model_20000.pt
     spk_id: 1
-    default_key: 0
+    default_pre_pitch_shift: 0
 
   - id: soyo
     name: Soyo
     ddsp_model_ckpt: third_party/ai_cover/DDSP-SVC/exp/reflow-test-soyo/model_14000.pt
     spk_id: 1
-    default_key: 0
+    default_pre_pitch_shift: 0
 
   - id: taki
     name: Taki
     ddsp_model_ckpt: third_party/ai_cover/DDSP-SVC/exp/reflow-test-taki/model_20000.pt
     spk_id: 1
-    default_key: 0
+    default_pre_pitch_shift: 0
 
   - id: tomorin
     name: Tomorin
     ddsp_model_ckpt: third_party/ai_cover/DDSP-SVC/exp/reflow-test-tomorin/model_30000.pt
     spk_id: 1
-    default_key: 0
+    default_pre_pitch_shift: 0
 
   - id: oblivionis
     name: Oblivionis
     ddsp_model_ckpt: third_party/ai_cover/DDSP-SVC/exp/reflow-test-oblivionis/model_20000.pt
     spk_id: 1
-    default_key: 0
+    default_pre_pitch_shift: 0
 
 runtime:
   upload_root: assets/uploads
@@ -65,7 +65,7 @@ runtime:
   cors_origins:
     - "*"
   constraints:
-    key:
+    pre_pitch_shift:
       min: -12
       max: 12
     volume:

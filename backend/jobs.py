@@ -34,7 +34,7 @@ FILE_KINDS = {"input", "vocals", "piano", "final"}
 @dataclass(frozen=True)
 class JobParams:
     role_id: str
-    key: int
+    pre_pitch_shift: int
     vocals_volume: float
     piano_volume: float
     original_filename: str | None = None
@@ -170,7 +170,7 @@ class JobManager:
             raise
         updated_params = JobParams(
             role_id=record.params.role_id,
-            key=record.params.key,
+            pre_pitch_shift=record.params.pre_pitch_shift,
             vocals_volume=vocals_volume,
             piano_volume=piano_volume,
             original_filename=record.params.original_filename,
@@ -229,8 +229,8 @@ class JobManager:
                 output_root=record.output_root,
                 device=self.runtime.device,
                 spk_id=role.spk_id,
-                key=record.params.key,
-                pre_pitch_shift=self.runtime.pre_pitch_shift,
+                key=0,
+                pre_pitch_shift=float(record.params.pre_pitch_shift),
                 pitch_extractor=self.runtime.pitch_extractor,
                 vocals_volume=record.params.vocals_volume,
                 piano_volume=record.params.piano_volume,
@@ -307,7 +307,7 @@ class JobManager:
             "message": record.message,
             "params": {
                 "role_id": record.params.role_id,
-                "key": record.params.key,
+                "pre_pitch_shift": record.params.pre_pitch_shift,
                 "vocals_volume": record.params.vocals_volume,
                 "piano_volume": record.params.piano_volume,
                 "original_filename": record.params.original_filename,
