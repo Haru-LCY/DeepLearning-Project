@@ -65,3 +65,7 @@ PianistTransformer/assets/
 node_modules/
 /package-lock.json
 /package.json
+
+# agent skills
+.agents
+skills-lock.json
