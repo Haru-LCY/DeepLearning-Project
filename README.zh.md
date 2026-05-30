@@ -210,7 +210,7 @@ python scripts/run_ai_piano_cover.py \
 
 ```bash
 python scripts/run_ai_piano_cover.py \
-  --input sample.mp3 \
+  --input yishiki.mp3 \
   --output-root assets/output/cover \
   --device cuda \
   --pop2piano-device cuda \
@@ -255,6 +255,7 @@ CPU 可以用于验证安装，但速度会明显慢于 GPU。
 - `--device`: Demucs 和 DDSP-SVC 使用的设备，`cuda` 或 `cpu`。
 - `--spk-id`: DDSP-SVC speaker id，默认 `1`。
 - `--key`: DDSP-SVC 半音移调，默认 `0`。
+- `--pre-pitch-shift`: 预处理阶段先移调的半音数，例如 `4.5` 会在分离、转换和 Pop2Piano 前先升 4.5 个半音，默认 `0.0`。
 - `--pitch-extractor`: DDSP-SVC pitch extractor，默认 `rmvpe`。
 - `--ddsp-model-ckpt`: DDSP-SVC checkpoint 路径。
 - `--pop2piano-model`: Pop2Piano Hugging Face id 或本地模型目录。
@@ -295,6 +296,8 @@ pretrain/pc_nsf_hifigan_44.1k_hop512_128bin_2025.02/config.json
 ```
 
 ### FluidSynth 或共享库缺失
+
+export FLUIDSYNTH_BIN=assets/soundfonts/fluidsynth_pkg/usr/bin/fluidsynth
 
 优先传完整三件套，并确保 `--soundfont` 是 `.sf2` 文件路径：
 

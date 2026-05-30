@@ -3,16 +3,13 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+import math
 import os
 from pathlib import Path
 import shlex
 import shutil
 import subprocess
 import sys
-
-import yaml
-
-from src.render import render_midi_to_wav
 
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
@@ -110,22 +107,32 @@ def _ffmpeg_runtime_env() -> dict[str, str] | None:
     return {"LD_LIBRARY_PATH": os.pathsep.join(parts)}
 
 
-def build_preprocess_command(input_audio: Path, output_wav: Path) -> CommandSpec:
+def build_preprocess_command(input_audio: Path, output_wav: Path, pre_pitch_shift: float = 0.0) -> CommandSpec:
+    if not math.isfinite(pre_pitch_shift):
+        raise ValueError("Preprocess pitch shift must be a finite number.")
+
+    argv = [
+        "ffmpeg",
+        "-y",
+        "-i",
+        str(input_audio),
+    ]
+    if pre_pitch_shift != 0.0:
+        pitch_ratio = 2 ** (pre_pitch_shift / 12)
+        argv.extend(["-filter:a", f"rubberband=pitch={pitch_ratio:.12g}"])
+    argv.extend([
+        "-ar",
+        "44100",
+        "-ac",
+        "2",
+        "-c:a",
+        "pcm_s16le",
+        str(output_wav),
+    ])
+
     return CommandSpec(
         cwd=REPO_ROOT,
-        argv=[
-            "ffmpeg",
-            "-y",
-            "-i",
-            str(input_audio),
-            "-ar",
-            "44100",
-            "-ac",
-            "2",
-            "-c:a",
-            "pcm_s16le",
-            str(output_wav),
-        ],
+        argv=argv,
         env=_ffmpeg_runtime_env(),
     )
 
@@ -165,6 +172,8 @@ def copy_demucs_outputs(preprocessed_audio: Path, raw_output_root: Path, artifac
 
 
 def resolve_ddsp_assets(model_ckpt: Path, repair: bool = True) -> None:
+    import yaml
+
     if not model_ckpt.exists():
         raise FileNotFoundError(f"DDSP model checkpoint was not found: {model_ckpt}")
     config_path = model_ckpt.with_name("config.yaml")
@@ -316,6 +325,7 @@ def run_ai_piano_cover(
     device: str = "cuda",
     spk_id: int = 1,
     key: int = 0,
+    pre_pitch_shift: float = 0.0,
     pitch_extractor: str = "rmvpe",
     vocals_volume: float = 1.0,
     piano_volume: float = 1.0,
@@ -365,7 +375,16 @@ def run_ai_piano_cover(
     print("")
 
     print("Stage 0: preprocess audio")
-    _run(build_preprocess_command(input_audio, artifacts.preprocessed_audio), dry_run=dry_run)
+    if pre_pitch_shift != 0.0:
+        print(f"Preprocess pitch shift: {pre_pitch_shift:+g} semitones")
+    _run(
+        build_preprocess_command(
+            input_audio,
+            artifacts.preprocessed_audio,
+            pre_pitch_shift=pre_pitch_shift,
+        ),
+        dry_run=dry_run,
+    )
 
     print("")
     print("Stage 1: separate vocals with Demucs")
@@ -393,9 +412,10 @@ def run_ai_piano_cover(
 
     print("")
     print("Stage 3: generate Pop2Piano accompaniment")
+    pop2piano_input_audio = artifacts.preprocessed_audio if pre_pitch_shift != 0.0 else input_audio
     _run(
         build_pop2piano_command(
-            input_audio=input_audio,
+            input_audio=pop2piano_input_audio,
             output_midi=artifacts.piano_midi,
             model=pop2piano_model,
             composer=pop2piano_composer,
@@ -409,6 +429,8 @@ def run_ai_piano_cover(
     print("")
     print("Stage 4: render piano MIDI to WAV")
     if not dry_run:
+        from src.render import render_midi_to_wav
+
         render_midi_to_wav(
             input_midi=artifacts.piano_midi,
             output_wav=artifacts.piano_wav,

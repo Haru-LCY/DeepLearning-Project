@@ -42,6 +42,12 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--device", default="cuda", choices=("cuda", "cpu"), help="Device for Demucs and DDSP-SVC.")
     parser.add_argument("--spk-id", default=1, type=int, help="DDSP-SVC speaker id.")
     parser.add_argument("--key", default=0, type=int, help="DDSP-SVC pitch shift in semitones.")
+    parser.add_argument(
+        "--pre-pitch-shift",
+        default=0.0,
+        type=float,
+        help="Pitch shift applied during preprocessing before separation/conversion, in semitones.",
+    )
     parser.add_argument("--pitch-extractor", default="rmvpe", help="DDSP-SVC pitch extractor.")
     parser.add_argument("--vocals-volume", default=1.0, type=float, help="Final mix vocal gain.")
     parser.add_argument("--piano-volume", default=1.0, type=float, help="Final mix piano gain.")
@@ -80,6 +86,7 @@ def main() -> None:
         device=args.device,
         spk_id=args.spk_id,
         key=args.key,
+        pre_pitch_shift=args.pre_pitch_shift,
         pitch_extractor=args.pitch_extractor,
         vocals_volume=args.vocals_volume,
         piano_volume=args.piano_volume,
