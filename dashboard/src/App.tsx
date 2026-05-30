@@ -22,7 +22,7 @@ import {
   Text,
   VStack,
 } from "@chakra-ui/react"
-import { useEffect, useState } from "react"
+import { useEffect, useRef, useState } from "react"
 import {
   LuAudioLines,
   LuBadgeCheck,
@@ -40,6 +40,7 @@ import {
   LuCheck,
 } from "react-icons/lu"
 
+import { ColorModeButton } from "@/components/ui/color-mode"
 import { toaster } from "@/components/ui/toaster"
 
 const API_BASE = import.meta.env.VITE_API_BASE_URL ?? "http://localhost:8000"
@@ -87,6 +88,7 @@ type Job = {
     final?: string | null
   }
   error?: string | null
+  updated_at?: string
 }
 
 const FALLBACK_CONFIG: BackendConfig = {
@@ -127,6 +129,7 @@ function App() {
   const [config, setConfig] = useState<BackendConfig>(FALLBACK_CONFIG)
   const [selectedRole, setSelectedRole] = useState("amoris")
   const [audioFile, setAudioFile] = useState<File | null>(null)
+  const [audioPreviewUrl, setAudioPreviewUrl] = useState<string | null>(null)
   const [keyShift, setKeyShift] = useState([0])
   const [vocalsVolume, setVocalsVolume] = useState([1])
   const [pianoVolume, setPianoVolume] = useState([1])
@@ -140,6 +143,7 @@ function App() {
   const canRemix = job?.status === "completed" && Boolean(job.artifacts.final)
   const eventJobId = job?.job_id
   const eventJobStatus = job?.status
+  const audioPreviewUrlRef = useRef<string | null>(null)
 
   useEffect(() => {
     const controller = new AbortController()
@@ -171,6 +175,14 @@ function App() {
 
     loadConfig()
     return () => controller.abort()
+  }, [])
+
+  useEffect(() => {
+    return () => {
+      if (audioPreviewUrlRef.current) {
+        URL.revokeObjectURL(audioPreviewUrlRef.current)
+      }
+    }
   }, [])
 
   useEffect(() => {
@@ -236,6 +248,23 @@ function App() {
     }
   }
 
+  function handleAudioFileChange(file: File | null) {
+    if (audioPreviewUrlRef.current) {
+      URL.revokeObjectURL(audioPreviewUrlRef.current)
+      audioPreviewUrlRef.current = null
+    }
+
+    setAudioFile(file)
+    if (!file) {
+      setAudioPreviewUrl(null)
+      return
+    }
+
+    const nextPreviewUrl = URL.createObjectURL(file)
+    audioPreviewUrlRef.current = nextPreviewUrl
+    setAudioPreviewUrl(nextPreviewUrl)
+  }
+
   async function handleRemix() {
     if (!job) return
 
@@ -280,13 +309,18 @@ function App() {
 
       <Container maxW="7xl" py={{ base: 5, md: 8 }} position="relative">
         <Stack gap={{ base: 6, md: 8 }}>
+          <HStack justify="flex-end">
+            <ColorModeButton />
+          </HStack>
+
           <Grid templateColumns={{ base: "1fr", xl: "1.18fr 0.82fr" }} gap="6">
             <GridItem>
               <Stack gap="6">
                 <WorkflowCard job={job} stages={config.stages} />
                 <UploadCard
                   audioFile={audioFile}
-                  onFileChange={setAudioFile}
+                  previewUrl={audioPreviewUrl}
+                  onFileChange={handleAudioFileChange}
                   disabled={isRunning}
                 />
                 <RolePicker
@@ -396,11 +430,12 @@ function WorkflowCard({ job, stages }: WorkflowCardProps) {
 
 type UploadCardProps = {
   audioFile: File | null
+  previewUrl: string | null
   onFileChange: (file: File | null) => void
   disabled: boolean
 }
 
-function UploadCard({ audioFile, onFileChange, disabled }: UploadCardProps) {
+function UploadCard({ audioFile, previewUrl, onFileChange, disabled }: UploadCardProps) {
   return (
     <Card.Root>
       <Card.Header pb="3">
@@ -427,19 +462,24 @@ function UploadCard({ audioFile, onFileChange, disabled }: UploadCardProps) {
         </FileUpload.Root>
 
         {audioFile && (
-          <HStack mt="4" p="3" rounded="lg" bg="bg.subtle" gap="3">
-            <Icon color="purple.fg">
-              <LuFileAudio />
-            </Icon>
-            <Stack gap="0" minW="0">
-              <Text fontWeight="medium" truncate>
-                {audioFile.name}
-              </Text>
-              <Text color="fg.muted" textStyle="sm">
-                {formatFileSize(audioFile.size)} ready
-              </Text>
-            </Stack>
-          </HStack>
+          <Stack mt="4" p="3" rounded="lg" bg="bg.subtle" gap="3">
+            <HStack gap="3">
+              <Icon color="purple.fg">
+                <LuFileAudio />
+              </Icon>
+              <Stack gap="0" minW="0">
+                <Text fontWeight="medium" truncate>
+                  {audioFile.name}
+                </Text>
+                <Text color="fg.muted" textStyle="sm">
+                  {formatFileSize(audioFile.size)} ready
+                </Text>
+              </Stack>
+            </HStack>
+            {previewUrl && (
+              <audio controls src={previewUrl} style={{ width: "100%" }} />
+            )}
+          </Stack>
         )}
       </Card.Body>
     </Card.Root>
@@ -709,6 +749,8 @@ type ResultCardProps = {
 }
 
 function ResultCard({ job }: ResultCardProps) {
+  const artifactVersion = job?.updated_at ?? `${job?.progress ?? 0}`
+
   return (
     <Card.Root>
       <Card.Header pb="3">
@@ -751,14 +793,19 @@ function ResultCard({ job }: ResultCardProps) {
                 <Text mb="2" fontWeight="medium">
                   Final mix
                 </Text>
-                <audio controls src={apiUrl(job.artifacts.final)} style={{ width: "100%" }} />
+                <audio
+                  key={artifactVersion}
+                  controls
+                  src={artifactUrl(job.artifacts.final, artifactVersion)}
+                  style={{ width: "100%" }}
+                />
               </Box>
             )}
 
             <SimpleGrid columns={{ base: 1, md: 3, xl: 1 }} gap="3">
-              <DownloadButton label="翻唱人声" href={job.artifacts.vocals} />
-              <DownloadButton label="钢琴伴奏" href={job.artifacts.piano} />
-              <DownloadButton label="最终混音" href={job.artifacts.final} />
+              <DownloadButton label="翻唱人声" href={job.artifacts.vocals} version={artifactVersion} />
+              <DownloadButton label="钢琴伴奏" href={job.artifacts.piano} version={artifactVersion} />
+              <DownloadButton label="最终混音" href={job.artifacts.final} version={artifactVersion} />
             </SimpleGrid>
           </Stack>
         )}
@@ -767,10 +814,18 @@ function ResultCard({ job }: ResultCardProps) {
   )
 }
 
-function DownloadButton({ label, href }: { label: string; href?: string | null }) {
+function DownloadButton({
+  label,
+  href,
+  version,
+}: {
+  label: string
+  href?: string | null
+  version: string
+}) {
   return (
     <Button asChild variant="outline" disabled={!href} justifyContent="space-between">
-      <Link href={href ? apiUrl(href) : undefined} download>
+      <Link href={href ? artifactUrl(href, version) : undefined} download>
         {label}
         <LuDownload />
       </Link>
@@ -781,6 +836,12 @@ function DownloadButton({ label, href }: { label: string; href?: string | null }
 function apiUrl(path: string) {
   if (path.startsWith("http://") || path.startsWith("https://")) return path
   return `${API_BASE}${path}`
+}
+
+function artifactUrl(path: string, version: string) {
+  const url = apiUrl(path)
+  const separator = url.includes("?") ? "&" : "?"
+  return `${url}${separator}v=${encodeURIComponent(version)}`
 }
 
 async function readError(response: Response) {
