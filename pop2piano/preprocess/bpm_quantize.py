@@ -26,11 +26,10 @@ def estimate(meta_file, ignore_sustain_pedal):
     ):
         return
 
-    bpm, beat_times, confidence, estimates, essentia_beat_intervals = extract_rhythm(
-        sample.song
-    )
-    beat_times = np.array(beat_times)
-    essentia_beat_intervals = np.array(essentia_beat_intervals)
+    beat_times = np.asarray(extract_rhythm(sample.song), dtype=np.float32)
+    beat_intervals = np.diff(beat_times)
+    bpm = float(60.0 / np.median(beat_intervals)) if beat_intervals.size else 0.0
+    confidence = 0.0
 
     qns, discrete_notes, beat_steps_8th = midi_quantize_by_beats(
         sample, beat_times, 2, ignore_sustain_pedal=ignore_sustain_pedal
@@ -53,7 +52,7 @@ def estimate(meta_file, ignore_sustain_pedal):
     np.save(sample.notes, discrete_notes)
     np.save(sample.beatstep, beat_steps_8th)
     np.save(sample.beattime, beat_times)
-    np.save(sample.beatinterval, essentia_beat_intervals)
+    np.save(sample.beatinterval, beat_intervals)
 
 
 def main(meta_files, ignore_sustain_pedal):
@@ -75,7 +74,7 @@ def main(meta_files, ignore_sustain_pedal):
 if __name__ == "__main__":
     import argparse
 
-    parser = argparse.ArgumentParser(description="bpm estimate using essentia")
+    parser = argparse.ArgumentParser(description="bpm estimate using beat_this")
 
     parser.add_argument(
         "data_dir",

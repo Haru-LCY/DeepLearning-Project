@@ -1,12 +1,11 @@
 import copy
-import librosa
-import essentia
-import essentia.standard
 import numpy as np
 import scipy.interpolate as interp
 import note_seq
+import torch
 
-SAMPLERATE = 44100
+_FILE_BEAT_TRACKER = None
+_FILE_BEAT_TRACKER_CONFIG = None
 
 
 def nearest_onset_offset_digitize(on, off, bins):
@@ -96,16 +95,55 @@ def midi_quantize_by_beats(
     return qns, discrete_notes, beat_steps_8th
 
 
-def extract_rhythm(song, y=None):
-    if y is None:
-        y, sr = librosa.load(song, sr=SAMPLERATE)
+def _resolve_beat_this_device(device):
+    device = str(device)
+    if device.startswith("cuda") and not torch.cuda.is_available():
+        return "cpu"
+    return device
 
-    essentia_tracker = essentia.standard.RhythmExtractor2013(method="multifeature")
-    (
-        bpm,
-        beat_times,
-        confidence,
-        estimates,
-        essentia_beat_intervals,
-    ) = essentia_tracker(y)
-    return bpm, beat_times, confidence, estimates, essentia_beat_intervals
+
+def get_file_beat_tracker(device="cuda", checkpoint_path="final0", dbn=False):
+    """Lazily construct the beat_this file tracker once per configuration."""
+    global _FILE_BEAT_TRACKER, _FILE_BEAT_TRACKER_CONFIG
+
+    device = _resolve_beat_this_device(device)
+    tracker_config = (device, checkpoint_path, dbn)
+
+    if _FILE_BEAT_TRACKER is None or _FILE_BEAT_TRACKER_CONFIG != tracker_config:
+        try:
+            from beat_this.inference import File2Beats
+        except ImportError as exc:
+            raise ImportError(
+                "beat_this is required for rhythm extraction. "
+                "Install the PyPI package with `pip install beat-this`."
+            ) from exc
+
+        _FILE_BEAT_TRACKER = File2Beats(
+            checkpoint_path=checkpoint_path,
+            device=device,
+            dbn=dbn,
+        )
+        _FILE_BEAT_TRACKER_CONFIG = tracker_config
+
+    return _FILE_BEAT_TRACKER
+
+
+def extract_rhythm(song, y=None, sr=None, device="cuda", checkpoint_path="final0"):
+    """
+    Return beat times for an audio file using beat_this File2Beats.
+
+    The y and sr parameters are accepted for compatibility with the previous
+    signature. File2Beats loads the audio directly from song.
+    """
+    del y, sr
+
+    tracker = get_file_beat_tracker(
+        device=device,
+        checkpoint_path=checkpoint_path,
+        dbn=False,
+    )
+
+    with torch.inference_mode():
+        beats, _downbeats = tracker(str(song))
+
+    return np.asarray(beats, dtype=np.float32)

@@ -248,34 +248,16 @@ class TransformerWrapper(pl.LightningModule):
             if os.path.exists(midi_path):
                 return
 
-        ESSENTIA_SAMPLERATE = 44100
-
         if beatsteps is None:
-            y, sr = librosa.load(audio_path, sr=ESSENTIA_SAMPLERATE)
-            (
-                bpm,
-                beat_times,
-                confidence,
-                estimates,
-                essentia_beat_intervals,
-            ) = extract_rhythm(audio_path, y=y)
-            beat_times = np.array(beat_times)
+            beat_times = extract_rhythm(audio_path, device=str(device))
+            beat_times = np.asarray(beat_times, dtype=np.float32)
             beatsteps = interpolate_beat_times(beat_times, steps_per_beat, extend=True)
-        else:
-            y = None
+
+        y = None
+        sr = None
 
         if self.use_mel:
-            if audio_y is None and config.dataset.sample_rate != ESSENTIA_SAMPLERATE:
-                if y is not None:
-                    y = librosa.core.resample(
-                        y,
-                        orig_sr=ESSENTIA_SAMPLERATE,
-                        target_sr=config.dataset.sample_rate,
-                    )
-                    sr = config.dataset.sample_rate
-                else:
-                    y, sr = librosa.load(audio_path, sr=config.dataset.sample_rate)
-            elif audio_y is not None:
+            if audio_y is not None:
                 if audio_sr != config.dataset.sample_rate:
                     audio_y = librosa.core.resample(
                         audio_y, orig_sr=audio_sr, target_sr=config.dataset.sample_rate
@@ -283,6 +265,8 @@ class TransformerWrapper(pl.LightningModule):
                     audio_sr = config.dataset.sample_rate
                 y = audio_y
                 sr = audio_sr
+            else:
+                y, sr = librosa.load(audio_path, sr=config.dataset.sample_rate)
 
             start_sample = int(beatsteps[0] * sr)
             end_sample = int(beatsteps[-1] * sr)
