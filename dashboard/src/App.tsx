@@ -50,8 +50,10 @@ import oblivionisImage from "../character/oblivionis.png"
 import soyoImage from "../character/soyo.png"
 import takiImage from "../character/taki.png"
 import tomorinImage from "../character/tomorin.png"
+import avemujicaLogo from "../logo/logo_avemujica.png"
+import mygoLogo from "../logo/logo_transparent_bg.png"
 
-import { ColorModeButton, useColorMode } from "@/components/ui/color-mode"
+import { useColorMode } from "@/components/ui/color-mode"
 import { toaster } from "@/components/ui/toaster"
 
 const DEFAULT_API_BASE = import.meta.env.VITE_API_BASE_URL ?? "http://localhost:8000"
@@ -148,6 +150,19 @@ const DARK_ROLE_IDS = ["amoris", "doloris", "oblivionis", "mortis"] as const
 type CharacterRoleId = (typeof LIGHT_ROLE_IDS)[number] | (typeof DARK_ROLE_IDS)[number]
 type AccentPalette = "blue" | "red"
 
+const MYGO_BLUE = "#0888B8"
+const MYGO_BLUE_FAINT = "rgba(8, 136, 184, 0.12)"
+const MYGO_BLUE_BORDER = "rgba(8, 136, 184, 0.38)"
+const MYGO_BLUE_SOFT = "rgba(8, 136, 184, 0.34)"
+
+const MYGO_PALETTE_CSS = {
+  "--chakra-colors-color-palette-solid": MYGO_BLUE,
+  "--chakra-colors-color-palette-fg": MYGO_BLUE,
+  "--chakra-colors-color-palette-focus-ring": MYGO_BLUE,
+  "--chakra-colors-color-palette-muted": MYGO_BLUE_FAINT,
+  "--chakra-colors-color-palette-subtle": MYGO_BLUE_FAINT,
+}
+
 const CHARACTER_ROLE_IMAGES: Record<CharacterRoleId, string> = {
   amoris: amorisImage,
   anon: anonImage,
@@ -197,19 +212,19 @@ function useInitialPanelHeight() {
 }
 
 function controlSolidBg(accentPalette: AccentPalette) {
-  return accentPalette === "red" ? "#7f1d1d" : undefined
+  return accentPalette === "red" ? "#7f1d1d" : MYGO_BLUE
 }
 
 function controlSolidHoverBg(accentPalette: AccentPalette) {
-  return accentPalette === "red" ? "#991b1b" : undefined
+  return accentPalette === "red" ? "#991b1b" : MYGO_BLUE
 }
 
 function controlSoftBg(accentPalette: AccentPalette) {
-  return accentPalette === "red" ? "#5f151b" : undefined
+  return accentPalette === "red" ? "#5f151b" : MYGO_BLUE_FAINT
 }
 
 function controlAccentColor(accentPalette: AccentPalette) {
-  return accentPalette === "red" ? "#b45353" : `${accentPalette}.fg`
+  return accentPalette === "red" ? "#b45353" : MYGO_BLUE
 }
 
 function App() {
@@ -230,6 +245,8 @@ function App() {
   const [remixing, setRemixing] = useState(false)
 
   const selectedRoleDetails = config.roles.find((role) => role.id === selectedRole)
+  const jobRoleDetails = config.roles.find((role) => role.id === job?.params.role_id)
+  const coverRoleName = jobRoleDetails?.name ?? job?.params.role_id ?? selectedRoleDetails?.name ?? selectedRole
   const isRunning = job?.status === "queued" || job?.status === "running"
   const isProcessing = isRunning || submitting || remixing
   const canSubmit = Boolean(audioFile && selectedRoleDetails?.ready && !isProcessing)
@@ -418,6 +435,7 @@ function App() {
 
   return (
     <Box minH="100vh" bg={isDarkMode ? "#000000" : "#ffffff"} color="fg" position="relative" overflow="hidden">
+      <PullLampColorModeButton />
       <Container maxW="7xl" pt={{ base: 3, md: 4 }} pb={{ base: 5, md: 8 }} position="relative">
         <Stack gap={{ base: 4, md: 5 }}>
           <Grid templateColumns={{ base: "1fr", xl: "1.18fr 0.82fr" }} gap="6">
@@ -464,6 +482,7 @@ function App() {
                   disabled={isProcessing}
                   job={job}
                   busy={isProcessing}
+                  coverTitle={`${coverRoleName}'s cover`}
                   accentPalette={accentPalette}
                   isDarkMode={isDarkMode}
                 />
@@ -488,11 +507,112 @@ function App() {
                 }}
               />
             </HStack>
-            <ColorModeButton />
           </HStack>
         </Stack>
       </Container>
     </Box>
+  )
+}
+
+function PullLampColorModeButton() {
+  const { colorMode, toggleColorMode } = useColorMode()
+  const isDarkMode = colorMode === "dark"
+  const dragStartYRef = useRef<number | null>(null)
+  const [pullOffset, setPullOffset] = useState(0)
+
+  function getPullOffset(clientY: number) {
+    if (dragStartYRef.current === null) return 0
+    return Math.min(Math.max(clientY - dragStartYRef.current, 0), 34)
+  }
+
+  function releasePull(clientY: number) {
+    const nextOffset = getPullOffset(clientY)
+    dragStartYRef.current = null
+    setPullOffset(0)
+    if (nextOffset >= 18) toggleColorMode()
+  }
+
+  return (
+    <Button
+      aria-label={isDarkMode ? "向下拉切换到浅色模式" : "向下拉切换到深色模式"}
+      title={isDarkMode ? "向下拉切换到浅色模式" : "向下拉切换到深色模式"}
+      position="fixed"
+      top="0"
+      right={{ base: "4", md: "6" }}
+      zIndex="docked"
+      w="58px"
+      h="104px"
+      minW="0"
+      p="0"
+      variant="plain"
+      display="flex"
+      alignItems="flex-start"
+      justifyContent="center"
+      cursor="grab"
+      touchAction="none"
+      onPointerDown={(event) => {
+        dragStartYRef.current = event.clientY
+        setPullOffset(0)
+        event.currentTarget.setPointerCapture(event.pointerId)
+      }}
+      onPointerMove={(event) => {
+        if (dragStartYRef.current !== null) setPullOffset(getPullOffset(event.clientY))
+      }}
+      onPointerUp={(event) => releasePull(event.clientY)}
+      onPointerCancel={() => {
+        dragStartYRef.current = null
+        setPullOffset(0)
+      }}
+      _hover={{ bg: "transparent" }}
+      _active={{ cursor: "grabbing" }}
+      _focusVisible={{ outline: "2px solid", outlineColor: isDarkMode ? "#b45353" : MYGO_BLUE, outlineOffset: "2px" }}
+    >
+      <Stack align="center" gap="0">
+        <Box
+          w="1px"
+          h={`${48 + pullOffset}px`}
+          bg={isDarkMode ? "rgba(248, 113, 113, 0.46)" : "rgba(8, 136, 184, 0.45)"}
+          transition="height 0.18s ease"
+        />
+        <Stack className="lamp-pull" align="center" gap="0" transition="transform 0.18s ease">
+          <Box
+            w="10px"
+            h="10px"
+            rounded="full"
+            bg={isDarkMode ? "#6f1d24" : MYGO_BLUE}
+            boxShadow={isDarkMode ? "0 0 8px rgba(248, 113, 113, 0.20)" : `0 0 18px ${MYGO_BLUE_SOFT}`}
+          />
+          <Box
+            mt="0"
+            w="34px"
+            h="24px"
+            roundedTop="full"
+            roundedBottom="md"
+            bg={isDarkMode ? "#1a0508" : "#fff7d6"}
+            borderWidth="1px"
+            borderColor={isDarkMode ? "rgba(248, 113, 113, 0.30)" : MYGO_BLUE}
+            boxShadow={
+              isDarkMode
+                ? "0 10px 18px rgba(0, 0, 0, 0.34)"
+                : `0 0 0 1px rgba(8, 136, 184, 0.18), 0 0 22px rgba(250, 204, 21, 0.42), 0 10px 24px rgba(8, 136, 184, 0.10)`
+            }
+            position="relative"
+            _after={{
+              content: '""',
+              position: "absolute",
+              left: "50%",
+              bottom: "-8px",
+              transform: "translateX(-50%)",
+              width: "44px",
+              height: "10px",
+              borderRadius: "999px",
+              background: isDarkMode ? "rgba(180, 83, 83, 0.12)" : "rgba(250, 204, 21, 0.24)",
+              filter: "blur(3px)",
+            }}
+          />
+        </Stack>
+      </Stack>
+    </Button>
   )
 }
 
@@ -503,10 +623,19 @@ type WorkflowCardProps = {
   isDarkMode: boolean
 }
 
+function normalizeDisplayedProgress(job: Job | null) {
+  const progress = job?.progress ?? 0
+  if (job?.stage_name === "piano_cover" && progress > 55 && progress < 90) {
+    return 55
+  }
+
+  return progress
+}
+
 function WorkflowCard({ job, stages, accentPalette, isDarkMode }: WorkflowCardProps) {
   const { panelRef, initialHeight } = useInitialPanelHeight()
-  const activeStep = Math.max((job?.stage ?? 1) - 1, 0)
-  const progress = job?.progress ?? 0
+  const activeStep = job?.status === "completed" ? stages.length : Math.max((job?.stage ?? 1) - 1, 0)
+  const progress = normalizeDisplayedProgress(job)
   const running = job?.status === "running" || job?.status === "queued"
 
   return (
@@ -522,53 +651,77 @@ function WorkflowCard({ job, stages, accentPalette, isDarkMode }: WorkflowCardPr
       shadow="sm"
     >
       <Card.Header pb="3" flexShrink="0">
-        <HStack justify="space-between" align="flex-start">
-          <Stack gap="1">
-            <Card.Title>四阶段处理进度</Card.Title>
-          </Stack>
-          {running && <Spinner size="sm" color={controlAccentColor(accentPalette)} />}
-        </HStack>
+        <Grid templateColumns="24px 1fr 24px" alignItems="center">
+          <Box />
+          <Card.Title textAlign="center">四阶段处理进度</Card.Title>
+          <Box display="flex" justifyContent="flex-end">
+            {running && <Spinner size="sm" color={controlAccentColor(accentPalette)} />}
+          </Box>
+        </Grid>
       </Card.Header>
-      <Card.Body gap="5" bg={surfacePanelBg(isDarkMode)} minH="0" overflowY="auto">
-        <Steps.Root step={activeStep} count={stages.length} colorPalette={accentPalette} size="sm">
-          <Steps.List>
-            {stages.map((stage, index) => {
-              const StageIcon = STAGE_ICONS[index] ?? LuSparkles
-              return (
-                <Steps.Item key={stage.name} index={index} title={stage.label}>
-                  <Steps.Indicator>
-                    <Steps.Status complete={<LuCheck />} incomplete={<StageIcon />} />
-                  </Steps.Indicator>
-                  <Steps.Title display={{ base: "none", md: "block" }}>
-                    {STAGE_COPY[stage.name] ?? stage.label}
-                  </Steps.Title>
-                  <Steps.Separator />
-                </Steps.Item>
-              )
-            })}
-          </Steps.List>
-        </Steps.Root>
+      <Card.Body
+        bg={surfacePanelBg(isDarkMode)}
+        minH="0"
+        overflowY="auto"
+        display="flex"
+        alignItems="center"
+        justifyContent="center"
+      >
+        <Stack w="100%" maxW="720px" gap="5" align="stretch" justify="center">
+          <Steps.Root step={activeStep} count={stages.length} colorPalette={accentPalette} size="sm" css={accentPalette === "blue" ? MYGO_PALETTE_CSS : undefined}>
+            <Steps.List>
+              {stages.map((stage, index) => {
+                const StageIcon = STAGE_ICONS[index] ?? LuSparkles
+                const stepHighlighted = index <= activeStep || job?.status === "completed"
+                const stepComplete = index < activeStep || job?.status === "completed"
 
-        <Progress.Root value={progress} colorPalette={accentPalette} striped={running} animated={running}>
-          <HStack justify="space-between" mb="1">
-            <Progress.Label color="fg.muted">
-              {job?.stage_name ? STAGE_COPY[job.stage_name] ?? job.stage_name : "等待提交"}
-            </Progress.Label>
-            <Progress.ValueText>{progress}%</Progress.ValueText>
-          </HStack>
-          <Progress.Track>
-            <Progress.Range bg={controlSolidBg(accentPalette)} />
-          </Progress.Track>
-        </Progress.Root>
+                return (
+                  <Steps.Item key={stage.name} index={index} title={stage.label}>
+                    <Steps.Indicator
+                      bg={accentPalette === "blue" && stepHighlighted ? MYGO_BLUE : undefined}
+                      borderColor={accentPalette === "blue" && stepHighlighted ? MYGO_BLUE : undefined}
+                      color={accentPalette === "blue" && stepHighlighted ? "white" : undefined}
+                    >
+                      <Steps.Status complete={<LuCheck />} incomplete={<StageIcon />} />
+                    </Steps.Indicator>
+                    <Steps.Title
+                      display={{ base: "none", md: "block" }}
+                      color={accentPalette === "blue" && stepHighlighted ? MYGO_BLUE : undefined}
+                    >
+                      {STAGE_COPY[stage.name] ?? stage.label}
+                    </Steps.Title>
+                    <Steps.Separator bg={accentPalette === "blue" && stepComplete ? MYGO_BLUE : undefined} />
+                  </Steps.Item>
+                )
+              })}
+            </Steps.List>
+          </Steps.Root>
 
-        {job?.status === "failed" && (
-          <Alert.Root status="error" variant="surface">
-            <Alert.Indicator />
-            <Alert.Content>
-              <Alert.Title>{job.error ?? job.message}</Alert.Title>
-            </Alert.Content>
-          </Alert.Root>
-        )}
+          <Progress.Root value={progress} colorPalette={accentPalette} striped animated={running} css={accentPalette === "blue" ? MYGO_PALETTE_CSS : undefined}>
+            <HStack justify="space-between" mb="1">
+              <Progress.Label color="fg.muted">
+                {job?.stage_name ? STAGE_COPY[job.stage_name] ?? job.stage_name : "等待提交"}
+              </Progress.Label>
+              <Progress.ValueText>{progress}%</Progress.ValueText>
+            </HStack>
+            <Progress.Track>
+              <Progress.Range
+                bg={accentPalette === "red" ? "#7f1d1d" : MYGO_BLUE}
+                backgroundImage="linear-gradient(45deg, rgba(255, 255, 255, 0.22) 25%, transparent 25%, transparent 50%, rgba(255, 255, 255, 0.22) 50%, rgba(255, 255, 255, 0.22) 75%, transparent 75%, transparent)"
+                backgroundSize="1rem 1rem"
+              />
+            </Progress.Track>
+          </Progress.Root>
+
+          {job?.status === "failed" && (
+            <Alert.Root status="error" variant="surface">
+              <Alert.Indicator />
+              <Alert.Content>
+                <Alert.Title>{job.error ?? job.message}</Alert.Title>
+              </Alert.Content>
+            </Alert.Root>
+          )}
+        </Stack>
       </Card.Body>
     </Card.Root>
   )
@@ -581,6 +734,7 @@ type AudioPanelGroupProps = {
   disabled: boolean
   job: Job | null
   busy: boolean
+  coverTitle: string
   accentPalette: AccentPalette
   isDarkMode: boolean
 }
@@ -592,6 +746,7 @@ function AudioPanelGroup({
   disabled,
   job,
   busy,
+  coverTitle,
   accentPalette,
   isDarkMode,
 }: AudioPanelGroupProps) {
@@ -616,6 +771,7 @@ function AudioPanelGroup({
         job={job}
         audioFile={audioFile}
         busy={busy}
+        coverTitle={coverTitle}
         accentPalette={accentPalette}
         isDarkMode={isDarkMode}
         stretch
@@ -654,13 +810,15 @@ function UploadCard({ audioFile, previewUrl, onFileChange, disabled, accentPalet
     >
       <Card.Header py="3" pb="2" flexShrink="0">
         <HStack justify="space-between" gap="3">
-          <Card.Title>上传输入音频</Card.Title>
+          <Card.Title>上传原唱</Card.Title>
           {audioFile && (
             <Button
               aria-label="取消上传"
               size="xs"
               variant="ghost"
               colorPalette={accentPalette}
+              color={controlAccentColor(accentPalette)}
+              _hover={{ bg: controlSoftBg(accentPalette) }}
               disabled={disabled}
               flexShrink="0"
               onClick={() => onFileChange(null)}
@@ -706,7 +864,7 @@ function UploadCard({ audioFile, previewUrl, onFileChange, disabled, accentPalet
                   {previewUrl && (
                     <AudioPlayer
                       src={previewUrl}
-                      title={audioFile.name}
+                      title="Original"
                       accentPalette={accentPalette}
                       isDarkMode={isDarkMode}
                       fill
@@ -772,7 +930,19 @@ function RolePicker({ roles, value, onChange, disabled }: RolePickerProps) {
       shadow="sm"
     >
       <Card.Header pb="3" flexShrink="0">
-        <Card.Title>选择翻唱角色</Card.Title>
+        <Box position="relative" h={{ base: "50px", md: "62px" }} overflow="visible">
+          <Image
+            src={isDarkMode ? avemujicaLogo : mygoLogo}
+            alt={isDarkMode ? "Ave Mujica" : "MyGO"}
+            position="absolute"
+            left="50%"
+            top="56%"
+            transform="translate(-50%, -50%)"
+            h={isDarkMode ? { base: "72px", md: "88px" } : { base: "98px", md: "120px" }}
+            maxW={isDarkMode ? "390px" : "520px"}
+            objectFit="contain"
+          />
+        </Box>
       </Card.Header>
       <Card.Body bg={surfacePanelBg(isDarkMode)} minH="0" overflowY="auto">
         <SimpleGrid columns={{ base: 1, md: 2, xl: 4 }} gap={{ base: 3, md: 4 }}>
@@ -804,8 +974,8 @@ function RolePicker({ roles, value, onChange, disabled }: RolePickerProps) {
                 borderWidth={selected ? "4px" : "2px"}
                 borderColor={
                   selected
-                    ? isDarkMode ? "#b45353" : "blue.500"
-                    : isDarkMode ? "rgba(248, 113, 113, 0.30)" : "rgba(147, 197, 253, 0.48)"
+                    ? isDarkMode ? "#b45353" : MYGO_BLUE
+                    : isDarkMode ? "rgba(248, 113, 113, 0.30)" : MYGO_BLUE_BORDER
                 }
                 bg={
                   isDarkMode
@@ -814,7 +984,7 @@ function RolePicker({ roles, value, onChange, disabled }: RolePickerProps) {
                 }
                 boxShadow={
                   selected
-                    ? isDarkMode ? "0 18px 42px rgba(248, 113, 113, 0.24)" : "0 18px 40px rgba(37, 99, 235, 0.24)"
+                    ? isDarkMode ? "0 18px 42px rgba(248, 113, 113, 0.24)" : `0 18px 40px ${MYGO_BLUE_SOFT}`
                     : isDarkMode ? "0 12px 28px rgba(0, 0, 0, 0.28)" : "0 10px 24px rgba(15, 23, 42, 0.08)"
                 }
                 cursor={cardDisabled ? "not-allowed" : "pointer"}
@@ -825,12 +995,12 @@ function RolePicker({ roles, value, onChange, disabled }: RolePickerProps) {
                     ? undefined
                     : {
                         transform: "translateY(-2px)",
-                        borderColor: selected ? isDarkMode ? "#b45353" : "blue.500" : isDarkMode ? "#b45353" : "blue.300",
+                        borderColor: selected ? isDarkMode ? "#b45353" : MYGO_BLUE : isDarkMode ? "#b45353" : MYGO_BLUE_BORDER,
                       }
                 }
                 _focusVisible={{
                   outline: "3px solid",
-                  outlineColor: isDarkMode ? "#b45353" : "blue.300",
+                  outlineColor: isDarkMode ? "#b45353" : MYGO_BLUE,
                   outlineOffset: "3px",
                 }}
               >
@@ -878,8 +1048,12 @@ function RolePicker({ roles, value, onChange, disabled }: RolePickerProps) {
                     maxW="100%"
                     fontWeight="bold"
                     fontSize={nameFontSize}
-                    color={isDarkMode ? "red.100" : "blue.600"}
-                    lineClamp={1}
+                    color={isDarkMode ? "red.100" : MYGO_BLUE}
+                    lineHeight="1.25"
+                    whiteSpace="nowrap"
+                    overflow="hidden"
+                    textOverflow="ellipsis"
+                    pb="0.5"
                   >
                     {role.name}
                   </Text>
@@ -944,6 +1118,9 @@ function ControlPanel(props: ControlPanelProps) {
       borderWidth="1px"
       borderColor={surfacePanelBorderColor(isDarkMode)}
       shadow="sm"
+      minH={{ xl: "400px" }}
+      display="flex"
+      flexDir="column"
     >
       <Card.Header py="2" pb="1" flexShrink="0">
         <HStack justify="space-between">
@@ -955,10 +1132,11 @@ function ControlPanel(props: ControlPanelProps) {
           </Icon>
         </HStack>
       </Card.Header>
-      <Card.Body pt="1" pb="2" gap="3" bg={surfacePanelBg(isDarkMode)} overflow="visible">
-        <Stack gap="3">
+      <Card.Body pt="1" pb="2" gap="3" bg={surfacePanelBg(isDarkMode)} overflow="visible" flex="1" display="flex">
+        <Stack gap="3" flex="1" justify="space-evenly">
           <ParameterSlider
             label="升降 Key"
+            icon={<LuMusic2 style={{ transform: "translateX(1.5px)" }} />}
             value={keyShift}
             min={constraints.pre_pitch_shift.min}
             max={constraints.pre_pitch_shift.max}
@@ -987,7 +1165,7 @@ function ControlPanel(props: ControlPanelProps) {
             disabled={disabled}
           />
           <VolumeSlider
-            label="Piano cover 音量"
+            label="钢琴伴奏音量"
             value={pianoVolume}
             min={constraints.piano_volume.min}
             max={constraints.piano_volume.max}
@@ -1096,16 +1274,20 @@ function ParameterSlider({
 }: ParameterSliderProps) {
   return (
     <Slider.Root
+      css={colorPalette === "blue" ? MYGO_PALETTE_CSS : undefined}
       value={value}
       min={min}
       max={max}
       step={step}
       origin={origin}
       colorPalette={colorPalette}
-      disabled={disabled}
+      aria-disabled={disabled}
+      opacity="1"
       thumbAlignment="center"
       getAriaValueText={(details) => String(details.value)}
-      onValueChange={(details) => onChange(details.value)}
+      onValueChange={(details) => {
+        if (!disabled) onChange(details.value)
+      }}
     >
       <HStack justify="space-between" mb="1">
         <Slider.Label>
@@ -1118,15 +1300,15 @@ function ParameterSlider({
           {valueText}
         </Badge>
       </HStack>
-      <Slider.Control data-has-mark-label>
-        <Slider.Track>
+      <Slider.Control data-has-mark-label pointerEvents={disabled ? "none" : undefined} opacity={disabled ? 0.72 : 1}>
+        <Slider.Track bg="bg.muted">
           <Slider.Range bg={controlSolidBg(colorPalette)} />
         </Slider.Track>
         <Slider.Thumb
           index={0}
-          bg={colorPalette === "red" ? "#2d070b" : undefined}
+          bg={colorPalette === "red" ? "#2d070b" : "#ffffff"}
           borderColor={controlSolidBg(colorPalette)}
-          boxShadow={colorPalette === "red" ? "0 0 0 3px rgba(127, 29, 29, 0.24)" : undefined}
+          boxShadow={colorPalette === "red" ? "0 0 0 3px rgba(127, 29, 29, 0.24)" : `0 0 0 3px ${MYGO_BLUE_FAINT}`}
         >
           <Slider.HiddenInput />
         </Slider.Thumb>
@@ -1149,6 +1331,7 @@ type ResultCardProps = {
   job: Job | null
   audioFile: File | null
   busy: boolean
+  coverTitle: string
   accentPalette: AccentPalette
   isDarkMode: boolean
   stretch?: boolean
@@ -1172,11 +1355,12 @@ function getResultStatus(job: Job | null, audioFile: File | null, busy: boolean,
   return { label: "Idle", colorPalette: "gray" }
 }
 
-function ResultCard({ job, audioFile, busy, accentPalette, isDarkMode, stretch = false }: ResultCardProps) {
+function ResultCard({ job, audioFile, busy, coverTitle, accentPalette, isDarkMode, stretch = false }: ResultCardProps) {
   const { panelRef, initialHeight } = useInitialPanelHeight()
   const artifactVersion = job?.updated_at ?? `${job?.progress ?? 0}`
   const finalMix = job?.artifacts.final
   const status = getResultStatus(job, audioFile, busy, accentPalette)
+  const statusUsesAccent = status.colorPalette === accentPalette
   const panelHeight = stretch ? "100%" : initialHeight ?? undefined
   const panelMinHeight = stretch ? "0" : initialHeight ?? undefined
   const panelMaxHeight = stretch ? undefined : initialHeight ?? undefined
@@ -1195,12 +1379,13 @@ function ResultCard({ job, audioFile, busy, accentPalette, isDarkMode, stretch =
     >
       <Card.Header py="3" pb="2" flexShrink="0">
         <HStack justify="space-between" gap="3">
-          <Card.Title>输出音频</Card.Title>
+          <Card.Title>钢伴翻唱</Card.Title>
           <Badge
             colorPalette={status.colorPalette}
             variant="surface"
-            bg={status.label === "Running" ? controlSoftBg(accentPalette) : undefined}
-            color={status.label === "Running" ? controlAccentColor(accentPalette) : undefined}
+            bg={statusUsesAccent ? controlSoftBg(accentPalette) : undefined}
+            color={statusUsesAccent ? controlAccentColor(accentPalette) : undefined}
+            borderColor={statusUsesAccent ? controlAccentColor(accentPalette) : undefined}
           >
             {status.label}
           </Badge>
@@ -1211,7 +1396,7 @@ function ResultCard({ job, audioFile, busy, accentPalette, isDarkMode, stretch =
           <AudioPlayer
             key={artifactVersion}
             src={artifactUrl(finalMix, artifactVersion)}
-            title="Final mix"
+            title={coverTitle}
             accentPalette={accentPalette}
             isDarkMode={isDarkMode}
             fill
@@ -1243,7 +1428,7 @@ function OutputPlaceholder({ audioFile, busy, accentPalette, isDarkMode }: Outpu
     ? "翻唱生成中，请耐心等待"
     : audioFile
       ? "暂无输出音频，请提交任务"
-      : "暂无输入音频，请上传输入音频"
+      : "暂无原唱，请上传原唱"
 
   return (
     <Box
@@ -1317,7 +1502,7 @@ function AudioPlayer({ src, title, accentPalette, isDarkMode, fill = false }: Au
       alignItems="center"
       rounded="md"
       borderWidth="1px"
-      borderColor={isDarkMode ? "rgba(248, 113, 113, 0.26)" : "rgba(37, 99, 235, 0.18)"}
+      borderColor={isDarkMode ? "rgba(248, 113, 113, 0.26)" : "rgba(8, 136, 184, 0.18)"}
       bg={isDarkMode ? "#070707" : "#f8fbff"}
       boxShadow={isDarkMode ? "inset 0 1px 0 rgba(255, 255, 255, 0.06)" : "inset 0 1px 0 rgba(255, 255, 255, 0.9)"}
     >
@@ -1362,6 +1547,7 @@ function AudioPlayer({ src, title, accentPalette, isDarkMode, fill = false }: Au
             </Text>
           </HStack>
           <Slider.Root
+            css={accentPalette === "blue" ? MYGO_PALETTE_CSS : undefined}
             value={[currentTime]}
             min={0}
             max={duration || 1}
