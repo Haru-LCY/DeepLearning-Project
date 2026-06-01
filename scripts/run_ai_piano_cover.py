@@ -80,7 +80,7 @@ def parse_args() -> argparse.Namespace:
 
 def main() -> None:
     args = parse_args()
-    artifacts = run_ai_piano_cover(
+    result = run_ai_piano_cover(
         input_audio=args.input,
         output_root=args.output_root,
         device=args.device,
@@ -100,12 +100,14 @@ def main() -> None:
         fluidsynth_lib_dir=args.fluidsynth_lib_dir,
         dry_run=args.dry_run,
     )
+    artifacts = result.artifacts
     print("")
     print(f"preprocessed_audio: {artifacts.preprocessed_audio}")
     print(f"ddsp_vocals: {artifacts.ddsp_vocals}")
     print(f"piano_midi: {artifacts.piano_midi}")
     print(f"piano_wav: {artifacts.piano_wav}")
     print(f"final_mix: {artifacts.final_mix}")
+    print(f"stage_timings: {result.stage_timings}")
 
 
 if __name__ == "__main__":

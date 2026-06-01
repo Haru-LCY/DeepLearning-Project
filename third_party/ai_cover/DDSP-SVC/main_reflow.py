@@ -1,4 +1,6 @@
 import os
+import time
+import json
 import torch
 import librosa
 import argparse
@@ -186,6 +188,9 @@ def cross_fade(a: np.ndarray, b: np.ndarray, idx: int):
 
 
 if __name__ == '__main__':
+    ddsp_timings = {}
+    t_total_start = time.perf_counter()
+    
     # parse commands
     cmd = parse_args()
     
@@ -195,12 +200,18 @@ if __name__ == '__main__':
         device = 'cuda' if torch.cuda.is_available() else 'cpu'
     
     # load reflow model
+    t0 = time.perf_counter()
     model, vocoder, args = load_model_vocoder(cmd.model_ckpt, device=device)
+    ddsp_timings['load_model'] = round(time.perf_counter() - t0, 3)
+    print(f'[T] load_model: {ddsp_timings["load_model"]}s')
     
     # load input
+    t0 = time.perf_counter()
     audio, sample_rate = librosa.load(cmd.input, sr=None)
     if len(audio.shape) > 1:
         audio = librosa.to_mono(audio)
+    ddsp_timings['load_audio'] = round(time.perf_counter() - t0, 3)
+    print(f'[T] load_audio: {ddsp_timings["load_audio"]}s')
     hop_size = args.data.block_size * sample_rate / args.data.sampling_rate
     win_size = args.data.volume_smooth_size * sample_rate / args.data.sampling_rate
 
@@ -214,6 +225,7 @@ if __name__ == '__main__':
     cache_dir_path = os.path.join(os.path.dirname(__file__), "cache")
     cache_file_path = os.path.join(cache_dir_path, f"{cmd.pitch_extractor}_{hop_size}_{cmd.f0_min}_{cmd.f0_max}_{md5_hash}.npy")
     
+    t0 = time.perf_counter()
     is_cache_available = os.path.exists(cache_file_path)
     if is_cache_available:
         # f0 cache load
@@ -234,6 +246,9 @@ if __name__ == '__main__':
         # f0 cache save
         os.makedirs(cache_dir_path, exist_ok=True)
         np.save(cache_file_path, f0, allow_pickle=False)
+    ddsp_timings['f0_extract'] = round(time.perf_counter() - t0, 3)
+    ddsp_timings['f0_cached'] = is_cache_available
+    print(f'[T] f0_extract (cached={is_cache_available}): {ddsp_timings["f0_extract"]}s')
     
     f0 = torch.from_numpy(f0).float().to(device).unsqueeze(-1).unsqueeze(0)
     
@@ -252,14 +267,18 @@ if __name__ == '__main__':
     
     # extract volume 
     print('Extracting the volume envelope of the input audio...')
+    t0 = time.perf_counter()
     volume_extractor = Volume_Extractor(hop_size, win_size)
     volume = volume_extractor.extract(audio)
+    ddsp_timings['volume_extract'] = round(time.perf_counter() - t0, 3)
+    print(f'[T] volume_extract: {ddsp_timings["volume_extract"]}s')
     mask = (volume > 10 ** (float(cmd.threhold) / 20)).astype('float')
     mask = torch.from_numpy(mask).float().to(device).unsqueeze(-1).unsqueeze(0)
     mask = upsample(mask, args.data.block_size).squeeze(-1)
     volume = torch.from_numpy(volume).float().to(device).unsqueeze(-1).unsqueeze(0)
     
     # load units encoder
+    t0 = time.perf_counter()
     if args.data.encoder == 'cnhubertsoftfish':
         cnhubertsoft_gate = args.data.cnhubertsoft_gate
     else:
@@ -271,6 +290,8 @@ if __name__ == '__main__':
                         args.data.encoder_hop_size,
                         cnhubertsoft_gate=cnhubertsoft_gate,
                         device = device)
+    ddsp_timings['load_encoder'] = round(time.perf_counter() - t0, 3)
+    print(f'[T] load_encoder: {ddsp_timings["load_encoder"]}s')
                             
     # speaker id or mix-speaker dictionary
     spk_mix_dict = literal_eval(cmd.spk_mix_dict)
@@ -314,15 +335,32 @@ if __name__ == '__main__':
     # forward and save the output
     result = np.zeros(0)
     current_length = 0
+    t0 = time.perf_counter()
     segments = split(audio, sample_rate, hop_size)
+    ddsp_timings['split_audio'] = round(time.perf_counter() - t0, 3)
+    print(f'[T] split_audio: {ddsp_timings["split_audio"]}s')
     print('Cut the input audio into ' + str(len(segments)) + ' slices')
+    ddsp_timings['n_segments'] = len(segments)
+    
+    cum_units_encode = 0.0
+    cum_model_forward = 0.0
+    cum_vocoder_infer = 0.0
+    cum_seg_loop = 0.0
+    
     with torch.no_grad():
-        for segment in tqdm(segments):
+        for seg_i, segment in enumerate(tqdm(segments)):
+            t_seg_start = time.perf_counter()
             start_frame = segment[0]
             seg_input = torch.from_numpy(segment[1]).float().unsqueeze(0).to(device)
+            
+            t_u0 = time.perf_counter()
             seg_units = units_encoder.encode(seg_input, sample_rate, hop_size)
+            cum_units_encode += time.perf_counter() - t_u0
+            
             seg_f0 = f0[:, start_frame : start_frame + seg_units.size(1), :]
-            seg_volume = volume[:, start_frame : start_frame + seg_units.size(1), :]    
+            seg_volume = volume[:, start_frame : start_frame + seg_units.size(1), :]
+            
+            t_m0 = time.perf_counter()
             seg_mel = model(
                     seg_units, 
                     seg_f0 / vocal_register_factor, 
@@ -334,7 +372,12 @@ if __name__ == '__main__':
                     infer_step=infer_step, 
                     method=method,
                     t_start=t_start)
+            cum_model_forward += time.perf_counter() - t_m0
+            
+            t_v0 = time.perf_counter()
             seg_output = vocoder.infer(seg_mel, seg_f0)
+            cum_vocoder_infer += time.perf_counter() - t_v0
+            
             seg_output *= mask[:, start_frame * args.data.block_size : (start_frame + seg_units.size(1)) * args.data.block_size]
             seg_output = seg_output.squeeze().cpu().numpy()
             
@@ -345,5 +388,29 @@ if __name__ == '__main__':
             else:
                 result = cross_fade(result, seg_output, current_length + silent_length)
             current_length = current_length + silent_length + len(seg_output)
-        sf.write(cmd.output, result, args.data.sampling_rate)
+            cum_seg_loop += time.perf_counter() - t_seg_start
+    
+    ddsp_timings['seg_loop_total'] = round(cum_seg_loop, 3)
+    ddsp_timings['units_encode_total'] = round(cum_units_encode, 3)
+    ddsp_timings['model_forward_total'] = round(cum_model_forward, 3)
+    ddsp_timings['vocoder_infer_total'] = round(cum_vocoder_infer, 3)
+    ddsp_timings['overhead'] = round(cum_seg_loop - cum_units_encode - cum_model_forward - cum_vocoder_infer, 3)
+    print(f'[T] seg_loop_total ({len(segments)} segs): {ddsp_timings["seg_loop_total"]}s')
+    print(f'[T]   units_encode: {ddsp_timings["units_encode_total"]}s')
+    print(f'[T]   model_forward (DDSP+Reflow): {ddsp_timings["model_forward_total"]}s')
+    print(f'[T]   vocoder_infer: {ddsp_timings["vocoder_infer_total"]}s')
+    print(f'[T]   overhead (mask/copy/fade): {ddsp_timings["overhead"]}s')
+    
+    t0 = time.perf_counter()
+    sf.write(cmd.output, result, args.data.sampling_rate)
+    ddsp_timings['save_output'] = round(time.perf_counter() - t0, 3)
+    print(f'[T] save_output: {ddsp_timings["save_output"]}s')
+    
+    ddsp_timings['total'] = round(time.perf_counter() - t_total_start, 3)
+    
+    timing_path = os.path.join(os.path.dirname(cmd.output), 'ddsp_timings.json')
+    os.makedirs(os.path.dirname(timing_path), exist_ok=True)
+    with open(timing_path, 'w') as f:
+        json.dump(ddsp_timings, f, indent=2)
+    print(f'[T] Timing report saved to {timing_path}')
     

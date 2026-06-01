@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+import json
 import math
 import os
 from pathlib import Path
@@ -10,6 +11,7 @@ import shlex
 import shutil
 import subprocess
 import sys
+import time
 from typing import Callable
 
 
@@ -52,6 +54,12 @@ class CoverArtifacts:
     piano_midi: Path
     piano_wav: Path
     final_mix: Path
+
+
+@dataclass(frozen=True)
+class CoverRunResult:
+    artifacts: CoverArtifacts
+    stage_timings: dict[str, float]
 
 
 def build_cover_artifacts(input_audio: Path, output_root: Path) -> CoverArtifacts:
@@ -380,13 +388,15 @@ def run_ai_piano_cover(
     fluidsynth_lib_dir: Path = DEFAULT_FLUIDSYNTH_LIB_DIR,
     dry_run: bool = False,
     progress_callback: ProgressCallback | None = None,
-) -> CoverArtifacts:
+) -> CoverRunResult:
     input_audio = input_audio.resolve()
     output_root = output_root.resolve()
     ddsp_model_ckpt = ddsp_model_ckpt.resolve()
     artifacts = build_cover_artifacts(input_audio, output_root)
     raw_demucs_root = output_root / "demucs_raw"
     runtime_cache_dir = output_root / "cache"
+    stage_timings: dict[str, float] = {}
+    total_start = time.perf_counter()
 
     if not input_audio.exists():
         raise FileNotFoundError(f"Input audio was not found: {input_audio}")
@@ -420,6 +430,7 @@ def run_ai_piano_cover(
     print("Stage 0: preprocess audio")
     if pre_pitch_shift != 0.0:
         print(f"Preprocess pitch shift: {pre_pitch_shift:+g} semitones")
+    stage_start = time.perf_counter()
     _run(
         build_preprocess_command(
             input_audio,
@@ -428,20 +439,24 @@ def run_ai_piano_cover(
         ),
         dry_run=dry_run,
     )
+    stage_timings["preprocess"] = round(time.perf_counter() - stage_start, 3)
     _emit_progress(progress_callback, "separate_vocals", 10, "Preprocessed audio")
 
     print("")
     print("Stage 1: separate vocals with Demucs")
+    stage_start = time.perf_counter()
     _run(build_demucs_command(artifacts.preprocessed_audio, raw_demucs_root, device), dry_run=dry_run)
     if not dry_run:
         copy_demucs_outputs(artifacts.preprocessed_audio, raw_demucs_root, artifacts)
         print(f"Vocals: {artifacts.vocals}")
         print(f"No vocals: {artifacts.no_vocals}")
+    stage_timings["separate_vocals"] = round(time.perf_counter() - stage_start, 3)
     _emit_progress(progress_callback, "separate_vocals", 25, "Separated vocals and accompaniment")
 
     print("")
     print("Stage 2: convert vocals with DDSP-SVC")
     _emit_progress(progress_callback, "voice_conversion", 30, "Starting voice conversion")
+    stage_start = time.perf_counter()
     _run(
         build_ddsp_command(
             input_vocals=artifacts.vocals,
@@ -455,12 +470,14 @@ def run_ai_piano_cover(
         ),
         dry_run=dry_run,
     )
+    stage_timings["voice_conversion"] = round(time.perf_counter() - stage_start, 3)
     _emit_progress(progress_callback, "voice_conversion", 50, "Converted vocals")
 
     print("")
     print("Stage 3: generate Pop2Piano accompaniment")
     _emit_progress(progress_callback, "piano_cover", 55, "Starting piano cover generation")
     pop2piano_input_audio = artifacts.preprocessed_audio if pre_pitch_shift != 0.0 else input_audio
+    stage_start = time.perf_counter()
     _run(
         build_pop2piano_command(
             input_audio=pop2piano_input_audio,
@@ -473,10 +490,12 @@ def run_ai_piano_cover(
         ),
         dry_run=dry_run,
     )
+    stage_timings["piano_cover"] = round(time.perf_counter() - stage_start, 3)
     _emit_progress(progress_callback, "piano_cover", 72, "Generated piano MIDI")
 
     print("")
     print("Stage 4: render piano MIDI to WAV")
+    stage_start = time.perf_counter()
     if not dry_run:
         from src.render import render_midi_to_wav
 
@@ -490,11 +509,13 @@ def run_ai_piano_cover(
         print(f"Piano WAV: {artifacts.piano_wav}")
     else:
         print(f"Would render {artifacts.piano_midi} -> {artifacts.piano_wav}")
+    stage_timings["render_piano"] = round(time.perf_counter() - stage_start, 3)
     _emit_progress(progress_callback, "piano_cover", 85, "Rendered piano audio")
 
     print("")
     print("Stage 5: mix DDSP vocals with piano accompaniment")
     _emit_progress(progress_callback, "merge", 90, "Starting final mix")
+    stage_start = time.perf_counter()
     mix_cover_audio(
         vocals_audio=artifacts.ddsp_vocals,
         piano_audio=artifacts.piano_wav,
@@ -503,6 +524,11 @@ def run_ai_piano_cover(
         piano_volume=piano_volume,
         dry_run=dry_run,
     )
+    stage_timings["merge"] = round(time.perf_counter() - stage_start, 3)
+    stage_timings["total"] = round(time.perf_counter() - total_start, 3)
+    if not dry_run:
+        timings_path = output_root / "timings.json"
+        timings_path.write_text(json.dumps(stage_timings, indent=2), encoding="utf-8")
     _emit_progress(progress_callback, "completed", 100, "Cover pipeline completed")
 
-    return artifacts
+    return CoverRunResult(artifacts=artifacts, stage_timings=stage_timings)

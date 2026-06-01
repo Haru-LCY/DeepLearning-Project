@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import argparse
+import json
 import os
+import time
 from pathlib import Path
 import tempfile
 
@@ -45,6 +47,9 @@ def parse_args() -> argparse.Namespace:
 
 
 def main() -> None:
+    pop2piano_timings = {}
+    t_total_start = time.perf_counter()
+    
     args = parse_args()
     os.environ.setdefault("NUMBA_CACHE_DIR", str(Path(tempfile.gettempdir()) / "pianoformer_cover_numba"))
     if Path(args.model).exists():
@@ -57,18 +62,29 @@ def main() -> None:
     if device == "auto":
         device = "cpu"
 
+    t0 = time.perf_counter()
     processor = Pop2PianoProcessor.from_pretrained(args.model)
     model = Pop2PianoForConditionalGeneration.from_pretrained(args.model).to(device)
     model.eval()
+    pop2piano_timings['load_model'] = round(time.perf_counter() - t0, 3)
+    print(f'[T] load_model: {pop2piano_timings["load_model"]}s')
 
+    t0 = time.perf_counter()
     audio, sr = librosa.load(args.input, sr=args.sampling_rate, mono=True)
+    pop2piano_timings['load_audio'] = round(time.perf_counter() - t0, 3)
+    print(f'[T] load_audio: {pop2piano_timings["load_audio"]}s')
+    
+    t0 = time.perf_counter()
     inputs = processor(
         audio=audio,
         sampling_rate=sr,
         return_tensors="pt",
     )
     inputs = {key: value.to(device) if hasattr(value, "to") else value for key, value in inputs.items()}
+    pop2piano_timings['preprocess'] = round(time.perf_counter() - t0, 3)
+    print(f'[T] preprocess: {pop2piano_timings["preprocess"]}s')
 
+    t0 = time.perf_counter()
     with torch.no_grad():
         generated = model.generate(
             input_features=inputs["input_features"],
@@ -76,7 +92,10 @@ def main() -> None:
             composer=args.composer,
             max_length=args.max_length,
         )
+    pop2piano_timings['model_generate'] = round(time.perf_counter() - t0, 3)
+    print(f'[T] model_generate (max_length={args.max_length}): {pop2piano_timings["model_generate"]}s')
 
+    t0 = time.perf_counter()
     generated = generated.cpu()
     decoder_inputs = {
         key: value.cpu() if hasattr(value, "cpu") else value
@@ -84,9 +103,22 @@ def main() -> None:
     }
     decoded = processor.batch_decode(generated, feature_extractor_output=decoder_inputs)
     midi = decoded["pretty_midi_objects"][0]
+    pop2piano_timings['decode'] = round(time.perf_counter() - t0, 3)
+    print(f'[T] decode: {pop2piano_timings["decode"]}s')
+    
+    t0 = time.perf_counter()
     args.output.parent.mkdir(parents=True, exist_ok=True)
     midi.write(str(args.output))
+    pop2piano_timings['save_midi'] = round(time.perf_counter() - t0, 3)
+    print(f'[T] save_midi: {pop2piano_timings["save_midi"]}s')
     print(args.output)
+
+    pop2piano_timings['device'] = device
+    pop2piano_timings['total'] = round(time.perf_counter() - t_total_start, 3)
+    
+    timing_path = args.output.parent / 'pop2piano_timings.json'
+    timing_path.write_text(json.dumps(pop2piano_timings, indent=2), encoding='utf-8')
+    print(f'[T] Timing report saved to {timing_path}')
 
 
 if __name__ == "__main__":

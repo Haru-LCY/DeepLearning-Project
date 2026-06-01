@@ -75,6 +75,7 @@ class JobRecord:
     progress: int = 0
     message: str = "Queued"
     artifacts: ArtifactPaths = field(default_factory=ArtifactPaths)
+    stage_timings: dict[str, float] = field(default_factory=dict)
     error: str | None = None
     created_at: str = field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
     updated_at: str = field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
@@ -157,6 +158,7 @@ class JobManager:
             error=None,
         )
         try:
+            started_at = datetime.now(timezone.utc)
             mix_cover_audio(
                 vocals_audio=record.artifacts.ddsp_vocals,
                 piano_audio=record.artifacts.piano_wav,
@@ -178,6 +180,7 @@ class JobManager:
         self._update(
             job_id,
             params=updated_params,
+            stage_timings={**record.stage_timings, "merge": round((datetime.now(timezone.utc) - started_at).total_seconds(), 3)},
             status="completed",
             stage=4,
             stage_name="completed",
@@ -224,7 +227,7 @@ class JobManager:
             role = self.registry.get_ready_role(record.params.role_id)
             self._update(job_id, status="running", stage=1, stage_name="separate_vocals", progress=0, message="Starting job")
 
-            artifacts = run_ai_piano_cover(
+            result = run_ai_piano_cover(
                 input_audio=record.input_path,
                 output_root=record.output_root,
                 device=self.runtime.device,
@@ -247,9 +250,10 @@ class JobManager:
                 ),
             )
 
-            self._set_artifacts(job_id, ArtifactPaths.from_cover_artifacts(artifacts))
+            self._set_artifacts(job_id, ArtifactPaths.from_cover_artifacts(result.artifacts))
             self._update(
                 job_id,
+                stage_timings=result.stage_timings,
                 status="completed",
                 stage=4,
                 stage_name="completed",
@@ -313,6 +317,7 @@ class JobManager:
                 "original_filename": record.params.original_filename,
             },
             "artifacts": self._artifact_urls(record),
+            "stage_timings": record.stage_timings,
             "error": record.error,
             "created_at": record.created_at,
             "updated_at": record.updated_at,
