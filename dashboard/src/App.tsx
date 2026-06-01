@@ -154,6 +154,29 @@ const MYGO_BLUE = "#0888B8"
 const MYGO_BLUE_FAINT = "rgba(8, 136, 184, 0.12)"
 const MYGO_BLUE_BORDER = "rgba(8, 136, 184, 0.38)"
 const MYGO_BLUE_SOFT = "rgba(8, 136, 184, 0.34)"
+const DARK_GOTHIC_FONT_STACK = '"Dashboard Alice Gothic", "Dashboard Chinese Gothic", "UnifrakturMaguntia", "Old English Text MT", "Blackletter", "Grenze Gotisch", "华文新魏", "STXinwei", "华文行楷", "STXingkai", "KaiTi", fantasy, serif'
+const DARK_GOTHIC_FONT_FACE_CSS = `
+  @font-face {
+    font-family: "Dashboard Alice Gothic";
+    src: url("/fonts/Alice-In-Wonderland/AliceInWonderland-1GzL0-2.ttf") format("truetype");
+    font-display: swap;
+    size-adjust: 100%;
+    unicode-range: U+0000-00FF, U+0100-024F, U+2000-206F;
+  }
+
+  @font-face {
+    font-family: "Dashboard Chinese Gothic";
+    src: url("/fonts/GeTeShiZiTi/GeTeShiZiTi-1.ttf") format("truetype");
+    font-display: swap;
+    unicode-range: U+2E80-2EFF, U+3000-303F, U+3400-4DBF, U+4E00-9FFF, U+F900-FAFF, U+FF00-FFEF;
+  }
+`
+
+const DARK_GOTHIC_TEXT_CSS = {
+  "& :where(p, button, input, label, [data-part='title'], [data-part='label'], [data-part='value-text'])": {
+    fontSize: "1.06em",
+  },
+}
 
 const MYGO_PALETTE_CSS = {
   "--chakra-colors-color-palette-solid": MYGO_BLUE,
@@ -256,6 +279,15 @@ function App() {
   const audioPreviewUrlRef = useRef<string | null>(null)
 
   useEffect(() => {
+    if (document.getElementById("dark-gothic-fonts")) return
+
+    const fontStyle = document.createElement("style")
+    fontStyle.id = "dark-gothic-fonts"
+    fontStyle.textContent = DARK_GOTHIC_FONT_FACE_CSS
+    document.head.appendChild(fontStyle)
+  }, [])
+
+  useEffect(() => {
     const controller = new AbortController()
 
     async function loadConfig() {
@@ -346,10 +378,6 @@ function App() {
 
       const nextJob = (await response.json()) as Job
       setJob(nextJob)
-      toaster.create({
-        title: "任务已提交",
-        type: "success",
-      })
     } catch {
       toaster.create({
         title: "提交失败",
@@ -408,10 +436,6 @@ function App() {
       }
 
       setJob((await response.json()) as Job)
-      toaster.create({
-        title: "混音已更新",
-        type: "success",
-      })
     } catch {
       toaster.create({
         title: "Remix 失败",
@@ -427,20 +451,16 @@ function App() {
     localStorage.setItem("api_base", trimmed)
     _apiBase = trimmed
     setApiBase(trimmed)
-    toaster.create({
-      title: "后端地址已保存",
-      type: "success",
-    })
   }
 
   return (
-    <Box minH="100vh" bg={isDarkMode ? "#000000" : "#ffffff"} color="fg" position="relative" overflow="hidden">
+    <Box minH="100vh" bg={isDarkMode ? "#000000" : "#ffffff"} color="fg" position="relative" overflow="hidden" fontFamily={isDarkMode ? DARK_GOTHIC_FONT_STACK : undefined} css={isDarkMode ? DARK_GOTHIC_TEXT_CSS : undefined}>
       <PullLampColorModeButton />
       <Container maxW="7xl" pt={{ base: 3, md: 4 }} pb={{ base: 5, md: 8 }} position="relative">
         <Stack gap={{ base: 4, md: 5 }}>
-          <Grid templateColumns={{ base: "1fr", xl: "1.18fr 0.82fr" }} gap="6">
-            <GridItem>
-              <Stack gap="6">
+          <Grid templateColumns={{ base: "1fr", xl: "1.18fr 0.82fr" }} gap="6" alignItems="stretch">
+            <GridItem display="flex" minH="0">
+              <Stack gap="6" flex="1" minH="0">
                 <WorkflowCard job={job} stages={config.stages} accentPalette={accentPalette} isDarkMode={isDarkMode} />
                 <RolePicker
                   roles={config.roles}
@@ -451,6 +471,7 @@ function App() {
                     setKeyShift([role?.default_pre_pitch_shift ?? 0])
                   }}
                   disabled={isProcessing}
+                  stretch
                 />
               </Stack>
             </GridItem>
@@ -580,7 +601,7 @@ function PullLampColorModeButton() {
             h="10px"
             rounded="full"
             bg={isDarkMode ? "#6f1d24" : MYGO_BLUE}
-            boxShadow={isDarkMode ? "0 0 8px rgba(248, 113, 113, 0.20)" : `0 0 18px ${MYGO_BLUE_SOFT}`}
+            boxShadow={isDarkMode ? "0 0 16px rgba(248, 113, 113, 0.42)" : `0 0 18px ${MYGO_BLUE_SOFT}`}
           />
           <Box
             mt="0"
@@ -593,7 +614,7 @@ function PullLampColorModeButton() {
             borderColor={isDarkMode ? "rgba(248, 113, 113, 0.30)" : MYGO_BLUE}
             boxShadow={
               isDarkMode
-                ? "0 10px 18px rgba(0, 0, 0, 0.34)"
+                ? "0 0 0 1px rgba(248, 113, 113, 0.20), 0 0 24px rgba(248, 113, 113, 0.34), 0 10px 24px rgba(127, 29, 29, 0.18)"
                 : `0 0 0 1px rgba(8, 136, 184, 0.18), 0 0 22px rgba(250, 204, 21, 0.42), 0 10px 24px rgba(8, 136, 184, 0.10)`
             }
             position="relative"
@@ -606,7 +627,7 @@ function PullLampColorModeButton() {
               width: "44px",
               height: "10px",
               borderRadius: "999px",
-              background: isDarkMode ? "rgba(180, 83, 83, 0.12)" : "rgba(250, 204, 21, 0.24)",
+              background: isDarkMode ? "rgba(248, 113, 113, 0.28)" : "rgba(250, 204, 21, 0.24)",
               filter: "blur(3px)",
             }}
           />
@@ -653,7 +674,7 @@ function WorkflowCard({ job, stages, accentPalette, isDarkMode }: WorkflowCardPr
       <Card.Header pb="3" flexShrink="0">
         <Grid templateColumns="24px 1fr 24px" alignItems="center">
           <Box />
-          <Card.Title textAlign="center">四阶段处理进度</Card.Title>
+          <Card.Title textAlign="center" fontSize={{ base: "3xl", md: "4xl" }}>四阶段处理进度</Card.Title>
           <Box display="flex" justifyContent="flex-end">
             {running && <Spinner size="sm" color={controlAccentColor(accentPalette)} />}
           </Box>
@@ -686,6 +707,7 @@ function WorkflowCard({ job, stages, accentPalette, isDarkMode }: WorkflowCardPr
                     </Steps.Indicator>
                     <Steps.Title
                       display={{ base: "none", md: "block" }}
+                      fontSize="md"
                       color={accentPalette === "blue" && stepHighlighted ? MYGO_BLUE : undefined}
                     >
                       {STAGE_COPY[stage.name] ?? stage.label}
@@ -699,7 +721,7 @@ function WorkflowCard({ job, stages, accentPalette, isDarkMode }: WorkflowCardPr
 
           <Progress.Root value={progress} colorPalette={accentPalette} striped animated={running} css={accentPalette === "blue" ? MYGO_PALETTE_CSS : undefined}>
             <HStack justify="space-between" mb="1">
-              <Progress.Label color="fg.muted">
+              <Progress.Label color="fg.muted" fontSize="md">
                 {job?.stage_name ? STAGE_COPY[job.stage_name] ?? job.stage_name : "等待提交"}
               </Progress.Label>
               <Progress.ValueText>{progress}%</Progress.ValueText>
@@ -894,9 +916,10 @@ type RolePickerProps = {
   value: string
   onChange: (value: string) => void
   disabled: boolean
+  stretch?: boolean
 }
 
-function RolePicker({ roles, value, onChange, disabled }: RolePickerProps) {
+function RolePicker({ roles, value, onChange, disabled, stretch = false }: RolePickerProps) {
   const { panelRef, initialHeight } = useInitialPanelHeight()
   const { colorMode } = useColorMode()
   const isDarkMode = colorMode === "dark"
@@ -920,9 +943,10 @@ function RolePicker({ roles, value, onChange, disabled }: RolePickerProps) {
   return (
     <Card.Root
       ref={panelRef}
-      h={initialHeight ?? undefined}
-      minH={initialHeight ?? undefined}
-      maxH={initialHeight ?? undefined}
+      h={stretch ? { xl: "100%" } : initialHeight ?? undefined}
+      minH={stretch ? { xl: "0" } : initialHeight ?? undefined}
+      maxH={stretch ? undefined : initialHeight ?? undefined}
+      flex={stretch ? { xl: "1" } : undefined}
       overflow="hidden"
       bg={surfacePanelBg(isDarkMode)}
       borderWidth="1px"
@@ -951,7 +975,7 @@ function RolePicker({ roles, value, onChange, disabled }: RolePickerProps) {
             const selected = role.id === value
             const roleImage = CHARACTER_ROLE_IMAGES[roleId]
             const cardDisabled = disabled || !role.ready
-            const nameFontSize = roleId === "oblivionis" ? { base: "lg", md: "xl" } : { base: "xl", md: "2xl" }
+            const nameFontSize = roleId === "oblivionis" ? { base: "xl", md: "2xl" } : { base: "2xl", md: "3xl" }
 
             return (
               <Button
@@ -1118,11 +1142,11 @@ function ControlPanel(props: ControlPanelProps) {
       borderWidth="1px"
       borderColor={surfacePanelBorderColor(isDarkMode)}
       shadow="sm"
-      minH={{ xl: "400px" }}
+      minH={{ xl: "440px" }}
       display="flex"
       flexDir="column"
     >
-      <Card.Header py="2" pb="1" flexShrink="0">
+      <Card.Header py="3" pb="2" flexShrink="0">
         <HStack justify="space-between">
           <Stack gap="1">
             <Card.Title>参数控制</Card.Title>
