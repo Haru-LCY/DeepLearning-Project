@@ -158,7 +158,7 @@ const DARK_GOTHIC_FONT_STACK = '"Dashboard Alice Gothic", "Dashboard Chinese Got
 const DARK_GOTHIC_FONT_FACE_CSS = `
   @font-face {
     font-family: "Dashboard Alice Gothic";
-    src: url("/fonts/Alice-In-Wonderland/AliceInWonderland-1GzL0-2.ttf") format("truetype");
+    src: url("/fonts/dark/AliceInWonderland.ttf") format("truetype");
     font-display: swap;
     size-adjust: 100%;
     unicode-range: U+0000-00FF, U+0100-024F, U+2000-206F;
@@ -166,7 +166,7 @@ const DARK_GOTHIC_FONT_FACE_CSS = `
 
   @font-face {
     font-family: "Dashboard Chinese Gothic";
-    src: url("/fonts/GeTeShiZiTi/GeTeShiZiTi-1.ttf") format("truetype");
+    src: url("/fonts/dark/GeTeShiZiTi.ttf") format("truetype");
     font-display: swap;
     unicode-range: U+2E80-2EFF, U+3000-303F, U+3400-4DBF, U+4E00-9FFF, U+F900-FAFF, U+FF00-FFEF;
   }
@@ -175,6 +175,30 @@ const DARK_GOTHIC_FONT_FACE_CSS = `
 const DARK_GOTHIC_TEXT_CSS = {
   "& :where(p, button, input, label, [data-part='title'], [data-part='label'], [data-part='value-text'])": {
     fontSize: "1.06em",
+  },
+}
+
+const LIGHT_ELEGANT_FONT_STACK = '"Dashboard Light Signature", "Dashboard Light Chinese", "STSong", "SimSun", serif'
+const LIGHT_ELEGANT_FONT_FACE_CSS = `
+  @font-face {
+    font-family: "Dashboard Light Signature";
+    src: url("/fonts/light/AidianSignature.ttf") format("truetype");
+    font-display: swap;
+    unicode-range: U+0041-005A, U+0061-0077, U+0079-007A, U+00C0-024F, U+2000-206F;
+  }
+
+  @font-face {
+    font-family: "Dashboard Light Chinese";
+    src: url("/fonts/light/SongHuiZongShouJin.ttf") format("truetype");
+    font-display: swap;
+    size-adjust: 122%;
+    unicode-range: U+0030-0039, U+0025, U+002B-002E, U+002F, U+003A, U+0078, U+2E80-2EFF, U+3000-303F, U+3400-4DBF, U+4E00-9FFF, U+F900-FAFF, U+FF00-FFEF;
+  }
+`
+
+const LIGHT_BOLD_TEXT_CSS = {
+  "& :where(p, span, button, input, label, h1, h2, h3, h4, h5, h6, [data-part='title'], [data-part='label'], [data-part='value-text'])": {
+    fontWeight: 700,
   },
 }
 
@@ -284,6 +308,15 @@ function App() {
     const fontStyle = document.createElement("style")
     fontStyle.id = "dark-gothic-fonts"
     fontStyle.textContent = DARK_GOTHIC_FONT_FACE_CSS
+    document.head.appendChild(fontStyle)
+  }, [])
+
+  useEffect(() => {
+    if (document.getElementById("light-elegant-fonts")) return
+
+    const fontStyle = document.createElement("style")
+    fontStyle.id = "light-elegant-fonts"
+    fontStyle.textContent = LIGHT_ELEGANT_FONT_FACE_CSS
     document.head.appendChild(fontStyle)
   }, [])
 
@@ -454,7 +487,7 @@ function App() {
   }
 
   return (
-    <Box minH="100vh" bg={isDarkMode ? "#000000" : "#ffffff"} color="fg" position="relative" overflow="hidden" fontFamily={isDarkMode ? DARK_GOTHIC_FONT_STACK : undefined} css={isDarkMode ? DARK_GOTHIC_TEXT_CSS : undefined}>
+    <Box minH="100vh" bg={isDarkMode ? "#000000" : "#ffffff"} color="fg" position="relative" overflow="hidden" fontFamily={isDarkMode ? DARK_GOTHIC_FONT_STACK : LIGHT_ELEGANT_FONT_STACK} css={isDarkMode ? DARK_GOTHIC_TEXT_CSS : LIGHT_BOLD_TEXT_CSS}>
       <PullLampColorModeButton />
       <Container maxW="7xl" pt={{ base: 3, md: 4 }} pb={{ base: 5, md: 8 }} position="relative">
         <Stack gap={{ base: 4, md: 5 }}>
@@ -708,6 +741,7 @@ function WorkflowCard({ job, stages, accentPalette, isDarkMode }: WorkflowCardPr
                     <Steps.Title
                       display={{ base: "none", md: "block" }}
                       fontSize="md"
+                      fontWeight={accentPalette === "blue" ? "bold" : undefined}
                       color={accentPalette === "blue" && stepHighlighted ? MYGO_BLUE : undefined}
                     >
                       {STAGE_COPY[stage.name] ?? stage.label}
@@ -721,10 +755,10 @@ function WorkflowCard({ job, stages, accentPalette, isDarkMode }: WorkflowCardPr
 
           <Progress.Root value={progress} colorPalette={accentPalette} striped animated={running} css={accentPalette === "blue" ? MYGO_PALETTE_CSS : undefined}>
             <HStack justify="space-between" mb="1">
-              <Progress.Label color="fg.muted" fontSize="md">
+              <Progress.Label color={isDarkMode ? "white" : "black"} fontSize="md">
                 {job?.stage_name ? STAGE_COPY[job.stage_name] ?? job.stage_name : "等待提交"}
               </Progress.Label>
-              <Progress.ValueText>{progress}%</Progress.ValueText>
+              <Progress.ValueText fontSize={isDarkMode ? undefined : "lg"}>{progress}%</Progress.ValueText>
             </HStack>
             <Progress.Track>
               <Progress.Range
@@ -975,7 +1009,9 @@ function RolePicker({ roles, value, onChange, disabled, stretch = false }: RoleP
             const selected = role.id === value
             const roleImage = CHARACTER_ROLE_IMAGES[roleId]
             const cardDisabled = disabled || !role.ready
-            const nameFontSize = roleId === "oblivionis" ? { base: "xl", md: "2xl" } : { base: "2xl", md: "3xl" }
+            const nameFontSize = isDarkMode
+              ? roleId === "oblivionis" ? { base: "xl", md: "2xl" } : { base: "2xl", md: "3xl" }
+              : roleId === "oblivionis" ? { base: "lg", md: "xl" } : { base: "xl", md: "2xl" }
 
             return (
               <Button
@@ -1064,7 +1100,7 @@ function RolePicker({ roles, value, onChange, disabled, stretch = false }: RoleP
                   textAlign="center"
                   rounded="xl"
                   bg={isDarkMode ? "rgba(37, 7, 10, 0.82)" : "rgba(255, 255, 255, 0.84)"}
-                  color={isDarkMode ? "red.50" : "gray.800"}
+                  color={isDarkMode ? "red.50" : "black"}
                   boxShadow={isDarkMode ? "0 10px 30px rgba(0, 0, 0, 0.34)" : "0 10px 28px rgba(15, 23, 42, 0.14)"}
                   backdropFilter="blur(8px)"
                 >
@@ -1320,7 +1356,7 @@ function ParameterSlider({
             <Span>{label}</Span>
           </HStack>
         </Slider.Label>
-        <Badge colorPalette={colorPalette} variant="surface" bg={controlSoftBg(colorPalette)} color={controlAccentColor(colorPalette)}>
+        <Badge colorPalette={colorPalette} variant="surface" bg={controlSoftBg(colorPalette)} color={controlAccentColor(colorPalette)} fontSize={colorPalette === "red" ? undefined : "sm"}>
           {valueText}
         </Badge>
       </HStack>
@@ -1340,7 +1376,7 @@ function ParameterSlider({
           {marks.map((mark) => (
             <Slider.Marker key={`${label}-${mark.value}`} value={mark.value}>
               <Slider.MarkerIndicator />
-              <Slider.MarkerLabel color="fg.muted" textStyle="xs">
+              <Slider.MarkerLabel color={colorPalette === "red" ? "fg.muted" : "black"} textStyle={colorPalette === "red" ? "xs" : "sm"}>
                 {mark.label}
               </Slider.MarkerLabel>
             </Slider.Marker>
@@ -1474,7 +1510,7 @@ function OutputPlaceholder({ audioFile, busy, accentPalette, isDarkMode }: Outpu
         <Icon fontSize="2xl" color={controlAccentColor(accentPalette)}>
           <PlaceholderIcon />
         </Icon>
-        <Text color="fg.muted" textStyle="sm" fontWeight="semibold">
+        <Text color={isDarkMode ? "white" : "black"} textStyle="sm" fontWeight="semibold">
           {message}
         </Text>
       </Stack>
@@ -1566,7 +1602,7 @@ function AudioPlayer({ src, title, accentPalette, isDarkMode, fill = false }: Au
                 {title}
               </Text>
             </HStack>
-            <Text color="fg.muted" textStyle="xs" flexShrink="0">
+            <Text color={isDarkMode ? "fg.muted" : "black"} textStyle={isDarkMode ? "xs" : "sm"} flexShrink="0">
               {formatDuration(currentTime)} / {formatDuration(duration)}
             </Text>
           </HStack>
