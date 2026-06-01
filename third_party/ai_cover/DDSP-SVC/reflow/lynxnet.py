@@ -93,7 +93,14 @@ class LYNXNetResidualLayer(nn.Module):
         self.convmodule = LYNXConvModule(dim=dim, expansion_factor=expansion_factor, kernel_size=kernel_size, in_norm=in_norm, activation=activation, dropout=dropout)
 
     def forward(self, x, conditioner, diffusion_step):
-        x = x + self.conditioner_projection(conditioner)
+        return self.forward_with_conditioner_projection(
+            x,
+            self.conditioner_projection(conditioner),
+            diffusion_step,
+        )
+
+    def forward_with_conditioner_projection(self, x, conditioner_projection, diffusion_step):
+        x = x + conditioner_projection
         res_x = x.transpose(1, 2)
         x = x + self.diffusion_projection(diffusion_step)
         x = x.transpose(1, 2)
@@ -154,18 +161,39 @@ class LYNXNet(nn.Module):
 
         assert x.dim() == 3, f"mel must be 3 dim tensor, but got {x.dim()}"
 
+        return self._forward_impl(x, diffusion_step, cond=cond, use_4_dim=use_4_dim)
+
+    def prepare_conditioner(self, cond):
+        return [layer.conditioner_projection(cond) for layer in self.residual_layers]
+
+    def forward_with_cond_cache(self, spec, diffusion_step, cond_cache):
+        x = spec
+        use_4_dim = False
+        if x.dim() == 4:
+            x = x[:, 0]
+            use_4_dim = True
+
+        assert x.dim() == 3, f"mel must be 3 dim tensor, but got {x.dim()}"
+
+        return self._forward_impl(x, diffusion_step, cond_cache=cond_cache, use_4_dim=use_4_dim)
+
+    def _forward_impl(self, x, diffusion_step, cond=None, cond_cache=None, use_4_dim=False):
         x = self.input_projection(x)  # x [B, residual_channel, T]
         #x = F.gelu(x)
-        
+
         diffusion_step = self.diffusion_embedding(diffusion_step).unsqueeze(-1)
-        
-        for layer in self.residual_layers:
-            x = layer(x, cond, diffusion_step)
+
+        if cond_cache is None:
+            for layer in self.residual_layers:
+                x = layer(x, cond, diffusion_step)
+        else:
+            for layer, conditioner_projection in zip(self.residual_layers, cond_cache):
+                x = layer.forward_with_conditioner_projection(x, conditioner_projection, diffusion_step)
 
         # post-norm
         x = self.norm(x.transpose(1, 2)).transpose(1, 2)
-        
+
         # MLP and GLU
         x = self.output_projection(x)  # [B, 128, T]
-        
+
         return x[:, None] if use_4_dim else x

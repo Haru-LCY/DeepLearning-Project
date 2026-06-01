@@ -34,16 +34,26 @@ class RectifiedFlow(nn.Module):
 
         return loss
     
-    def sample_euler(self, x, t, dt, cond):
-        x += self.velocity_fn(x, 1000 * t, cond) * dt
+    def _prepare_cond_cache(self, cond):
+        if hasattr(self.velocity_fn, 'prepare_conditioner'):
+            return self.velocity_fn.prepare_conditioner(cond)
+        return None
+
+    def _velocity(self, x, t, cond, cond_cache=None):
+        if cond_cache is not None and hasattr(self.velocity_fn, 'forward_with_cond_cache'):
+            return self.velocity_fn.forward_with_cond_cache(x, 1000 * t, cond_cache)
+        return self.velocity_fn(x, 1000 * t, cond)
+
+    def sample_euler(self, x, t, dt, cond, cond_cache=None):
+        x += self._velocity(x, t, cond, cond_cache) * dt
         t += dt
         return x, t
         
-    def sample_rk4(self, x, t, dt ,cond):
-        k_1 = self.velocity_fn(x, 1000 * t, cond)
-        k_2 = self.velocity_fn(x + 0.5 * k_1 * dt, 1000 * (t + 0.5 * dt), cond)
-        k_3 = self.velocity_fn(x + 0.5 * k_2 * dt, 1000 * (t + 0.5 * dt), cond)
-        k_4 = self.velocity_fn(x + k_3 * dt, 1000 * (t + dt), cond)
+    def sample_rk4(self, x, t, dt, cond, cond_cache=None):
+        k_1 = self._velocity(x, t, cond, cond_cache)
+        k_2 = self._velocity(x + 0.5 * k_1 * dt, t + 0.5 * dt, cond, cond_cache)
+        k_3 = self._velocity(x + 0.5 * k_2 * dt, t + 0.5 * dt, cond, cond_cache)
+        k_4 = self._velocity(x + k_3 * dt, t + dt, cond, cond_cache)
         x += (k_1 + 2 * k_2 + 2 * k_3 + k_4) * dt / 6
         t += dt
         return x, t
@@ -81,21 +91,23 @@ class RectifiedFlow(nn.Module):
                 t = torch.full((b,), t_start, device=device)
                 dt = (1.0 - t_start) / infer_step 
                   
+            cond_cache = self._prepare_cond_cache(cond)
+
             if method == 'euler':
                 if use_tqdm:
                     for i in tqdm(range(infer_step), desc='sample time step', total=infer_step):
-                        x, t = self.sample_euler(x, t, dt, cond)
+                        x, t = self.sample_euler(x, t, dt, cond, cond_cache)
                 else:
                     for i in range(infer_step):
-                        x, t = self.sample_euler(x, t, dt, cond)
+                        x, t = self.sample_euler(x, t, dt, cond, cond_cache)
             
             elif method == 'rk4':
                 if use_tqdm:
                     for i in tqdm(range(infer_step), desc='sample time step', total=infer_step):
-                        x, t = self.sample_rk4(x, t, dt, cond)
+                        x, t = self.sample_rk4(x, t, dt, cond, cond_cache)
                 else:
                     for i in range(infer_step):
-                        x, t = self.sample_rk4(x, t, dt, cond)
+                        x, t = self.sample_rk4(x, t, dt, cond, cond_cache)
             
             else:
                 raise NotImplementedError(method)
