@@ -10,9 +10,10 @@ import {
   GridItem,
   HStack,
   Icon,
+  Image,
+  Input,
   Link,
   Progress,
-  RadioCard,
   SimpleGrid,
   Slider,
   Span,
@@ -22,7 +23,7 @@ import {
   Text,
   VStack,
 } from "@chakra-ui/react"
-import { useEffect, useRef, useState } from "react"
+import { useEffect, useMemo, useRef, useState } from "react"
 import {
   LuAudioLines,
   LuBadgeCheck,
@@ -33,6 +34,7 @@ import {
   LuPiano,
   LuRefreshCw,
   LuRocket,
+  LuServer,
   LuSlidersHorizontal,
   LuSparkles,
   LuUpload,
@@ -40,10 +42,25 @@ import {
   LuCheck,
 } from "react-icons/lu"
 
-import { ColorModeButton } from "@/components/ui/color-mode"
+import amorisImage from "../character/amoris.png"
+import anonImage from "../character/anon.png"
+import dolorisImage from "../character/doloris.png"
+import mortisImage from "../character/mortis.png"
+import oblivionisImage from "../character/oblivionis.png"
+import soyoImage from "../character/soyo.png"
+import takiImage from "../character/taki.png"
+import tomorinImage from "../character/tomorin.png"
+
+import { ColorModeButton, useColorMode } from "@/components/ui/color-mode"
 import { toaster } from "@/components/ui/toaster"
 
-const API_BASE = import.meta.env.VITE_API_BASE_URL ?? "http://localhost:8000"
+const DEFAULT_API_BASE = import.meta.env.VITE_API_BASE_URL ?? "http://localhost:8000"
+
+function loadApiBase(): string {
+  return localStorage.getItem("api_base") || DEFAULT_API_BASE
+}
+
+let _apiBase = loadApiBase()
 
 type Role = {
   id: string
@@ -125,7 +142,73 @@ const STAGE_COPY: Record<string, string> = {
 
 const STAGE_ICONS = [LuAudioLines, LuMicVocal, LuPiano, LuSlidersHorizontal]
 
+const LIGHT_ROLE_IDS = ["anon", "soyo", "taki", "tomorin"] as const
+const DARK_ROLE_IDS = ["amoris", "doloris", "oblivionis", "mortis"] as const
+
+type CharacterRoleId = (typeof LIGHT_ROLE_IDS)[number] | (typeof DARK_ROLE_IDS)[number]
+type AccentPalette = "blue" | "red"
+
+const CHARACTER_ROLE_IMAGES: Record<CharacterRoleId, string> = {
+  amoris: amorisImage,
+  anon: anonImage,
+  doloris: dolorisImage,
+  mortis: mortisImage,
+  oblivionis: oblivionisImage,
+  soyo: soyoImage,
+  taki: takiImage,
+  tomorin: tomorinImage,
+}
+
+const CHARACTER_IMAGE_POSITIONS: Partial<Record<CharacterRoleId, string>> = {
+  mortis: "center 18%",
+  oblivionis: "center 18%",
+  tomorin: "center top",
+}
+
+function panelCardBg(accentPalette: AccentPalette) {
+  return accentPalette === "red" ? "rgba(42, 8, 12, 0.92)" : "rgba(255, 255, 255, 0.78)"
+}
+
+function panelBorderColor(accentPalette: AccentPalette) {
+  return accentPalette === "red" ? "rgba(248, 113, 113, 0.30)" : "rgba(147, 197, 253, 0.42)"
+}
+
+function panelBodyBg(accentPalette: AccentPalette) {
+  return accentPalette === "red"
+    ? "radial-gradient(circle at 18% 0%, rgba(92, 18, 24, 0.46), transparent 34%), radial-gradient(circle at 84% 12%, rgba(52, 9, 12, 0.66), transparent 30%), linear-gradient(180deg, rgba(45, 9, 13, 0.94), rgba(20, 7, 10, 0.98))"
+    : "radial-gradient(circle at 20% 0%, rgba(191, 219, 254, 0.45), transparent 34%), radial-gradient(circle at 82% 8%, rgba(219, 234, 254, 0.34), transparent 28%), linear-gradient(180deg, rgba(248, 250, 252, 0.62), rgba(240, 249, 255, 0.48))"
+}
+
+function panelInnerBg(accentPalette: AccentPalette) {
+  return accentPalette === "red" ? "rgba(37, 7, 10, 0.56)" : "rgba(240, 249, 255, 0.66)"
+}
+
+function controlSolidBg(accentPalette: AccentPalette) {
+  return accentPalette === "red" ? "#7f1d1d" : undefined
+}
+
+function controlSolidHoverBg(accentPalette: AccentPalette) {
+  return accentPalette === "red" ? "#991b1b" : undefined
+}
+
+function controlSoftBg(accentPalette: AccentPalette) {
+  return accentPalette === "red" ? "#5f151b" : undefined
+}
+
+function controlAccentColor(accentPalette: AccentPalette) {
+  return accentPalette === "red" ? "#b45353" : `${accentPalette}.fg`
+}
+
 function App() {
+  const { colorMode } = useColorMode()
+  const isDarkMode = colorMode === "dark"
+  const accentPalette: AccentPalette = isDarkMode ? "red" : "blue"
+  const pageGradient = isDarkMode
+    ? "radial-gradient(circle at 18% 0%, rgba(127, 29, 29, 0.26), transparent 34%), radial-gradient(circle at 84% 8%, rgba(69, 10, 10, 0.46), transparent 30%), linear-gradient(180deg, rgba(17, 7, 10, 0.98), rgba(36, 7, 12, 0.94))"
+    : "radial-gradient(circle at 15% 8%, rgba(186, 230, 253, 0.42), transparent 34%), radial-gradient(circle at 88% 0%, rgba(219, 234, 254, 0.48), transparent 30%), radial-gradient(circle at 50% 110%, rgba(125, 211, 252, 0.22), transparent 34%)"
+
+  const [apiBase, setApiBase] = useState(loadApiBase)
+
   const [config, setConfig] = useState<BackendConfig>(FALLBACK_CONFIG)
   const [selectedRole, setSelectedRole] = useState("amoris")
   const [audioFile, setAudioFile] = useState<File | null>(null)
@@ -175,7 +258,7 @@ function App() {
 
     loadConfig()
     return () => controller.abort()
-  }, [])
+  }, [apiBase])
 
   useEffect(() => {
     return () => {
@@ -298,31 +381,32 @@ function App() {
     }
   }
 
+  function handleSaveApiBase() {
+    const trimmed = apiBase.trim() || DEFAULT_API_BASE
+    localStorage.setItem("api_base", trimmed)
+    _apiBase = trimmed
+    setApiBase(trimmed)
+    toaster.create({
+      title: "后端地址已保存",
+      type: "success",
+    })
+  }
+
   return (
-    <Box minH="100vh" bg="bg" color="fg" position="relative" overflow="hidden">
+    <Box minH="100vh" bg={isDarkMode ? "#100709" : "bg"} color="fg" position="relative" overflow="hidden">
       <Box
         position="absolute"
         inset="0"
-        bg="radial-gradient(circle at 15% 10%, rgba(129, 140, 248, 0.22), transparent 32%), radial-gradient(circle at 85% 0%, rgba(236, 72, 153, 0.16), transparent 28%), radial-gradient(circle at 50% 110%, rgba(45, 212, 191, 0.14), transparent 32%)"
+        bg={pageGradient}
         pointerEvents="none"
       />
 
-      <Container maxW="7xl" py={{ base: 5, md: 8 }} position="relative">
-        <Stack gap={{ base: 6, md: 8 }}>
-          <HStack justify="flex-end">
-            <ColorModeButton />
-          </HStack>
-
+      <Container maxW="7xl" pt={{ base: 3, md: 4 }} pb={{ base: 5, md: 8 }} position="relative">
+        <Stack gap={{ base: 4, md: 5 }}>
           <Grid templateColumns={{ base: "1fr", xl: "1.18fr 0.82fr" }} gap="6">
             <GridItem>
               <Stack gap="6">
-                <WorkflowCard job={job} stages={config.stages} />
-                <UploadCard
-                  audioFile={audioFile}
-                  previewUrl={audioPreviewUrl}
-                  onFileChange={handleAudioFileChange}
-                  disabled={isRunning}
-                />
+                <WorkflowCard job={job} stages={config.stages} accentPalette={accentPalette} />
                 <RolePicker
                   roles={config.roles}
                   value={selectedRole}
@@ -337,7 +421,7 @@ function App() {
             </GridItem>
 
             <GridItem>
-              <Stack gap="6" position={{ xl: "sticky" }} top="6">
+              <Stack gap="4" position={{ xl: "sticky" }} top="6">
                 <ControlPanel
                   constraints={config.constraints}
                   keyShift={keyShift}
@@ -352,11 +436,39 @@ function App() {
                   canRemix={canRemix}
                   onSubmit={handleSubmit}
                   onRemix={handleRemix}
+                  accentPalette={accentPalette}
                 />
-                <ResultCard job={job} />
+                <UploadCard
+                  audioFile={audioFile}
+                  previewUrl={audioPreviewUrl}
+                  onFileChange={handleAudioFileChange}
+                  disabled={isRunning}
+                  accentPalette={accentPalette}
+                />
+                <ResultCard job={job} accentPalette={accentPalette} />
               </Stack>
             </GridItem>
           </Grid>
+
+          <HStack justify="space-between" gap="3" flexWrap="wrap">
+            <HStack gap="2">
+              <Icon color="fg.muted" size="sm">
+                <LuServer />
+              </Icon>
+              <Input
+                size="xs"
+                width="220px"
+                placeholder={DEFAULT_API_BASE}
+                value={apiBase}
+                onChange={(e) => setApiBase(e.target.value)}
+                onBlur={handleSaveApiBase}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter") handleSaveApiBase()
+                }}
+              />
+            </HStack>
+            <ColorModeButton />
+          </HStack>
         </Stack>
       </Container>
     </Box>
@@ -366,25 +478,32 @@ function App() {
 type WorkflowCardProps = {
   job: Job | null
   stages: BackendConfig["stages"]
+  accentPalette: AccentPalette
 }
 
-function WorkflowCard({ job, stages }: WorkflowCardProps) {
+function WorkflowCard({ job, stages, accentPalette }: WorkflowCardProps) {
   const activeStep = Math.max((job?.stage ?? 1) - 1, 0)
   const progress = job?.progress ?? 0
   const running = job?.status === "running" || job?.status === "queued"
 
   return (
-    <Card.Root>
+    <Card.Root
+      overflow="hidden"
+      bg={panelCardBg(accentPalette)}
+      borderWidth="1px"
+      borderColor={panelBorderColor(accentPalette)}
+      shadow="sm"
+    >
       <Card.Header pb="3">
         <HStack justify="space-between" align="flex-start">
           <Stack gap="1">
             <Card.Title>四阶段处理进度</Card.Title>
           </Stack>
-          {running && <Spinner size="sm" />}
+          {running && <Spinner size="sm" color={controlAccentColor(accentPalette)} />}
         </HStack>
       </Card.Header>
-      <Card.Body gap="5">
-        <Steps.Root step={activeStep} count={stages.length} colorPalette="purple" size="sm">
+      <Card.Body gap="5" bg={panelBodyBg(accentPalette)}>
+        <Steps.Root step={activeStep} count={stages.length} colorPalette={accentPalette} size="sm">
           <Steps.List>
             {stages.map((stage, index) => {
               const StageIcon = STAGE_ICONS[index] ?? LuSparkles
@@ -403,7 +522,7 @@ function WorkflowCard({ job, stages }: WorkflowCardProps) {
           </Steps.List>
         </Steps.Root>
 
-        <Progress.Root value={progress} colorPalette="purple" striped={running} animated={running}>
+        <Progress.Root value={progress} colorPalette={accentPalette} striped={running} animated={running}>
           <HStack justify="space-between" mb="2">
             <Progress.Label color="fg.muted">
               {job?.stage_name ? STAGE_COPY[job.stage_name] ?? job.stage_name : "等待提交"}
@@ -411,7 +530,7 @@ function WorkflowCard({ job, stages }: WorkflowCardProps) {
             <Progress.ValueText>{progress}%</Progress.ValueText>
           </HStack>
           <Progress.Track>
-            <Progress.Range />
+            <Progress.Range bg={controlSolidBg(accentPalette)} />
           </Progress.Track>
         </Progress.Root>
 
@@ -433,15 +552,22 @@ type UploadCardProps = {
   previewUrl: string | null
   onFileChange: (file: File | null) => void
   disabled: boolean
+  accentPalette: AccentPalette
 }
 
-function UploadCard({ audioFile, previewUrl, onFileChange, disabled }: UploadCardProps) {
+function UploadCard({ audioFile, previewUrl, onFileChange, disabled, accentPalette }: UploadCardProps) {
   return (
-    <Card.Root>
-      <Card.Header pb="3">
+    <Card.Root
+      overflow="hidden"
+      bg={panelCardBg(accentPalette)}
+      borderWidth="1px"
+      borderColor={panelBorderColor(accentPalette)}
+      shadow="sm"
+    >
+      <Card.Header py="3" pb="2">
         <Card.Title>上传输入音频</Card.Title>
       </Card.Header>
-      <Card.Body>
+      <Card.Body pt="2" bg={panelBodyBg(accentPalette)}>
         <FileUpload.Root
           accept={["audio/*"]}
           maxFiles={1}
@@ -450,21 +576,21 @@ function UploadCard({ audioFile, previewUrl, onFileChange, disabled }: UploadCar
           alignItems="stretch"
         >
           <FileUpload.HiddenInput />
-          <FileUpload.Dropzone minH="180px" borderStyle="dashed" bg="bg.subtle/60">
-            <Icon fontSize="3xl" color="purple.fg">
+          <FileUpload.Dropzone minH="92px" py="2" borderStyle="dashed" borderColor={panelBorderColor(accentPalette)} bg={panelInnerBg(accentPalette)}>
+            <Icon fontSize="xl" color={controlAccentColor(accentPalette)}>
               <LuUpload />
             </Icon>
             <FileUpload.DropzoneContent>
-              <Text fontWeight="semibold">拖拽音频到这里，或点击选择文件</Text>
+              <Text fontWeight="semibold" textStyle="sm">拖拽音频到这里，或点击选择文件</Text>
             </FileUpload.DropzoneContent>
           </FileUpload.Dropzone>
           <FileUpload.List showSize clearable />
         </FileUpload.Root>
 
         {audioFile && (
-          <Stack mt="4" p="3" rounded="lg" bg="bg.subtle" gap="3">
+          <Stack mt="2" p="2" rounded="lg" bg={panelInnerBg(accentPalette)} gap="1">
             <HStack gap="3">
-              <Icon color="purple.fg">
+              <Icon color={controlAccentColor(accentPalette)}>
                 <LuFileAudio />
               </Icon>
               <Stack gap="0" minW="0">
@@ -494,39 +620,145 @@ type RolePickerProps = {
 }
 
 function RolePicker({ roles, value, onChange, disabled }: RolePickerProps) {
+  const { colorMode } = useColorMode()
+  const isDarkMode = colorMode === "dark"
+  const visibleRoleIds = isDarkMode ? DARK_ROLE_IDS : LIGHT_ROLE_IDS
+  const visibleRoles = useMemo(
+    () =>
+      visibleRoleIds.map((roleId) => roles.find((role) => role.id === roleId)).filter(
+        (role): role is Role => Boolean(role),
+      ),
+    [roles, visibleRoleIds],
+  )
+
+  useEffect(() => {
+    if (disabled || visibleRoles.length === 0) return
+    if (visibleRoles.some((role) => role.id === value)) return
+
+    const nextRole = visibleRoles.find((role) => role.ready) ?? visibleRoles[0]
+    onChange(nextRole.id)
+  }, [disabled, onChange, value, visibleRoles])
+
   return (
-    <Card.Root>
+    <Card.Root
+      overflow="hidden"
+      bg={panelCardBg(isDarkMode ? "red" : "blue")}
+      borderWidth="1px"
+      borderColor={panelBorderColor(isDarkMode ? "red" : "blue")}
+      shadow="sm"
+    >
       <Card.Header pb="3">
         <Card.Title>选择翻唱角色</Card.Title>
       </Card.Header>
-      <Card.Body>
-        <RadioCard.Root
-          value={value}
-          onValueChange={(details) => {
-            if (details.value) onChange(details.value)
-          }}
-          colorPalette="purple"
-          disabled={disabled}
-        >
-          <SimpleGrid columns={{ base: 1, sm: 2, lg: 4 }} gap="3">
-            {roles.map((role) => (
-              <RadioCard.Item key={role.id} value={role.id} disabled={!role.ready}>
-                <RadioCard.ItemHiddenInput />
-                <RadioCard.ItemControl minH="76px" alignItems="center">
-                  <RadioCard.ItemContent>
-                    <RadioCard.ItemText>{role.name}</RadioCard.ItemText>
-                  </RadioCard.ItemContent>
-                  <RadioCard.ItemIndicator />
-                </RadioCard.ItemControl>
-                {!role.ready && role.error && (
-                  <RadioCard.ItemAddon color="orange.fg" textStyle="xs" lineClamp={2}>
-                    {role.error}
-                  </RadioCard.ItemAddon>
-                )}
-              </RadioCard.Item>
-            ))}
-          </SimpleGrid>
-        </RadioCard.Root>
+      <Card.Body bg={panelBodyBg(isDarkMode ? "red" : "blue")}>
+        <SimpleGrid columns={{ base: 1, md: 2, xl: 4 }} gap={{ base: 3, md: 4 }}>
+          {visibleRoles.map((role) => {
+            const roleId = role.id as CharacterRoleId
+            const selected = role.id === value
+            const roleImage = CHARACTER_ROLE_IMAGES[roleId]
+            const cardDisabled = disabled || !role.ready
+
+            return (
+              <Button
+                key={role.id}
+                type="button"
+                variant="plain"
+                disabled={cardDisabled}
+                aria-pressed={selected}
+                onClick={() => {
+                  if (!cardDisabled) onChange(role.id)
+                }}
+                position="relative"
+                display="block"
+                h="auto"
+                minH={{ base: "360px", md: "390px", xl: "420px" }}
+                minW="0"
+                p="0"
+                overflow="hidden"
+                rounded="2xl"
+                borderWidth={selected ? "3px" : "2px"}
+                borderColor={
+                  selected
+                    ? isDarkMode ? "#7f1d1d" : "blue.500"
+                    : isDarkMode ? "rgba(248, 113, 113, 0.30)" : "rgba(147, 197, 253, 0.48)"
+                }
+                bg={
+                  isDarkMode
+                    ? "linear-gradient(145deg, #3f0b12 0%, #68131b 52%, #1f0509 100%)"
+                    : "linear-gradient(145deg, #d9eef7 0%, #eef7f9 50%, #e9eefb 100%)"
+                }
+                boxShadow={
+                  selected
+                    ? isDarkMode ? "0 18px 42px rgba(248, 113, 113, 0.24)" : "0 18px 40px rgba(37, 99, 235, 0.24)"
+                    : isDarkMode ? "0 12px 28px rgba(0, 0, 0, 0.28)" : "0 10px 24px rgba(15, 23, 42, 0.08)"
+                }
+                cursor={cardDisabled ? "not-allowed" : "pointer"}
+                opacity={cardDisabled ? 0.58 : 1}
+                transition="border-color 0.18s ease, box-shadow 0.18s ease, transform 0.18s ease"
+                _hover={
+                  cardDisabled
+                    ? undefined
+                    : {
+                        transform: "translateY(-2px)",
+                        borderColor: selected ? isDarkMode ? "#7f1d1d" : "blue.500" : isDarkMode ? "#b45353" : "blue.300",
+                      }
+                }
+                _focusVisible={{
+                  outline: "3px solid",
+                  outlineColor: isDarkMode ? "#b45353" : "blue.300",
+                  outlineOffset: "3px",
+                }}
+              >
+                <Image
+                  src={roleImage}
+                  alt={role.name}
+                  position="absolute"
+                  inset="0"
+                  w="100%"
+                  h="100%"
+                  objectFit="cover"
+                  objectPosition={CHARACTER_IMAGE_POSITIONS[roleId] ?? "center 12%"}
+                  pointerEvents="none"
+                />
+                <Box
+                  position="absolute"
+                  inset="0"
+                  bg={
+                    isDarkMode
+                      ? "linear-gradient(180deg, rgba(24,5,8,0) 52%, rgba(24,5,8,0.18) 66%, rgba(24,5,8,0.58) 100%)"
+                      : "linear-gradient(180deg, rgba(255,255,255,0) 58%, rgba(255,255,255,0.14) 68%, rgba(15,23,42,0.10) 100%)"
+                  }
+                  pointerEvents="none"
+                />
+                <Stack
+                  position="absolute"
+                  left="3"
+                  right="3"
+                  bottom="3"
+                  minH="86px"
+                  justify="center"
+                  gap="1"
+                  px="4"
+                  py="3"
+                  rounded="xl"
+                  bg={isDarkMode ? "rgba(37, 7, 10, 0.82)" : "rgba(255, 255, 255, 0.84)"}
+                  color={isDarkMode ? "red.50" : "gray.800"}
+                  boxShadow={isDarkMode ? "0 10px 30px rgba(0, 0, 0, 0.34)" : "0 10px 28px rgba(15, 23, 42, 0.14)"}
+                  backdropFilter="blur(8px)"
+                >
+                  <Text fontWeight="bold" fontSize={{ base: "xl", md: "2xl" }} color={isDarkMode ? "red.100" : "blue.600"}>
+                    {role.name}
+                  </Text>
+                  {!role.ready && (
+                    <Text color={isDarkMode ? "orange.200" : "orange.700"} textStyle="xs" lineClamp={2}>
+                      {role.error ?? "角色暂不可用"}
+                    </Text>
+                  )}
+                </Stack>
+              </Button>
+            )
+          })}
+        </SimpleGrid>
       </Card.Body>
     </Card.Root>
   )
@@ -546,6 +778,7 @@ type ControlPanelProps = {
   canRemix: boolean
   onSubmit: () => void
   onRemix: () => void
+  accentPalette: AccentPalette
 }
 
 function ControlPanel(props: ControlPanelProps) {
@@ -563,22 +796,29 @@ function ControlPanel(props: ControlPanelProps) {
     canRemix,
     onSubmit,
     onRemix,
+    accentPalette,
   } = props
 
   return (
-    <Card.Root shadow="xl">
-      <Card.Header pb="3">
+    <Card.Root
+      overflow="hidden"
+      bg={panelCardBg(accentPalette)}
+      borderWidth="1px"
+      borderColor={panelBorderColor(accentPalette)}
+      shadow="sm"
+    >
+      <Card.Header py="3" pb="2">
         <HStack justify="space-between">
           <Stack gap="1">
             <Card.Title>参数控制</Card.Title>
           </Stack>
-          <Icon color="purple.fg" fontSize="2xl">
+          <Icon color={controlAccentColor(accentPalette)} fontSize="xl">
             <LuSlidersHorizontal />
           </Icon>
         </HStack>
       </Card.Header>
-      <Card.Body gap="6">
-        <Stack gap="5">
+      <Card.Body pt="2" pb="3" gap="4" bg={panelBodyBg(accentPalette)}>
+        <Stack gap="4">
           <ParameterSlider
             label="升降 Key"
             value={keyShift}
@@ -591,7 +831,7 @@ function ControlPanel(props: ControlPanelProps) {
               { value: constraints.pre_pitch_shift.max, label: `+${constraints.pre_pitch_shift.max}` },
             ]}
             valueText={`${formatSigned(keyShift[0])} semitones`}
-            colorPalette="purple"
+            colorPalette={accentPalette}
             origin="center"
             onChange={onKeyShiftChange}
           />
@@ -604,6 +844,7 @@ function ControlPanel(props: ControlPanelProps) {
             step={constraints.vocals_volume.step}
             onChange={onVocalsVolumeChange}
             icon={<LuVolume2 />}
+            accentPalette={accentPalette}
           />
           <VolumeSlider
             label="Piano cover 音量"
@@ -613,13 +854,16 @@ function ControlPanel(props: ControlPanelProps) {
             step={constraints.piano_volume.step}
             onChange={onPianoVolumeChange}
             icon={<LuPiano />}
+            accentPalette={accentPalette}
           />
         </Stack>
       </Card.Body>
-      <Card.Footer flexDir="column" alignItems="stretch" gap="3">
+      <Card.Footer pt="2" flexDir="column" alignItems="stretch" gap="2" bg={panelBodyBg(accentPalette)}>
         <Button
-          size="lg"
-          colorPalette="purple"
+          size="md"
+          colorPalette={accentPalette}
+          bg={controlSolidBg(accentPalette)}
+          _hover={{ bg: controlSolidHoverBg(accentPalette) }}
           disabled={!canSubmit}
           loading={submitting}
           onClick={onSubmit}
@@ -629,6 +873,10 @@ function ControlPanel(props: ControlPanelProps) {
         </Button>
         <Button
           variant="outline"
+          colorPalette={accentPalette}
+          borderColor={controlSoftBg(accentPalette)}
+          color={controlAccentColor(accentPalette)}
+          _hover={{ bg: controlSoftBg(accentPalette) }}
           disabled={!canRemix}
           loading={remixing}
           onClick={onRemix}
@@ -648,10 +896,11 @@ type VolumeSliderProps = {
   max: number
   step: number
   icon: React.ReactNode
+  accentPalette: AccentPalette
   onChange: (value: number[]) => void
 }
 
-function VolumeSlider({ label, value, min, max, step, icon, onChange }: VolumeSliderProps) {
+function VolumeSlider({ label, value, min, max, step, icon, accentPalette, onChange }: VolumeSliderProps) {
   return (
     <ParameterSlider
       label={label}
@@ -665,7 +914,7 @@ function VolumeSlider({ label, value, min, max, step, icon, onChange }: VolumeSl
         { value: max, label: `${max.toFixed(0)}x` },
       ]}
       valueText={`${value[0].toFixed(2)}x`}
-      colorPalette="cyan"
+      colorPalette={accentPalette}
       icon={icon}
       onChange={onChange}
     />
@@ -680,7 +929,7 @@ type ParameterSliderProps = {
   step: number
   marks: Array<{ value: number; label: string }>
   valueText: string
-  colorPalette: "purple" | "cyan"
+  colorPalette: AccentPalette
   icon?: React.ReactNode
   origin?: "center" | "start" | "end"
   onChange: (value: number[]) => void
@@ -711,22 +960,27 @@ function ParameterSlider({
       getAriaValueText={(details) => String(details.value)}
       onValueChange={(details) => onChange(details.value)}
     >
-      <HStack justify="space-between" mb="3">
+      <HStack justify="space-between" mb="2">
         <Slider.Label>
           <HStack gap="2">
             {icon && <Icon color="fg.muted">{icon}</Icon>}
             <Span>{label}</Span>
           </HStack>
         </Slider.Label>
-        <Badge colorPalette={colorPalette} variant="surface">
+        <Badge colorPalette={colorPalette} variant="surface" bg={controlSoftBg(colorPalette)} color={controlAccentColor(colorPalette)}>
           {valueText}
         </Badge>
       </HStack>
       <Slider.Control data-has-mark-label>
         <Slider.Track>
-          <Slider.Range />
+          <Slider.Range bg={controlSolidBg(colorPalette)} />
         </Slider.Track>
-        <Slider.Thumb index={0}>
+        <Slider.Thumb
+          index={0}
+          bg={colorPalette === "red" ? "#2d070b" : undefined}
+          borderColor={controlSolidBg(colorPalette)}
+          boxShadow={colorPalette === "red" ? "0 0 0 3px rgba(127, 29, 29, 0.24)" : undefined}
+        >
           <Slider.HiddenInput />
         </Slider.Thumb>
         <Slider.MarkerGroup>
@@ -746,14 +1000,21 @@ function ParameterSlider({
 
 type ResultCardProps = {
   job: Job | null
+  accentPalette: AccentPalette
 }
 
-function ResultCard({ job }: ResultCardProps) {
+function ResultCard({ job, accentPalette }: ResultCardProps) {
   const artifactVersion = job?.updated_at ?? `${job?.progress ?? 0}`
 
   return (
-    <Card.Root>
-      <Card.Header pb="3">
+    <Card.Root
+      overflow="hidden"
+      bg={panelCardBg(accentPalette)}
+      borderWidth="1px"
+      borderColor={panelBorderColor(accentPalette)}
+      shadow="sm"
+    >
+      <Card.Header py="3" pb="2">
         <HStack justify="space-between">
           <Stack gap="1">
             <Card.Title>结果预览</Card.Title>
@@ -765,17 +1026,17 @@ function ResultCard({ job }: ResultCardProps) {
           )}
         </HStack>
       </Card.Header>
-      <Card.Body gap="4">
+      <Card.Body pt="2" gap="3" bg={panelBodyBg(accentPalette)}>
         {!job && (
-          <VStack py="8" gap="3" color="fg.muted">
-            <Icon fontSize="4xl">
+          <VStack py="3" gap="2" color="fg.muted">
+            <Icon fontSize="2xl" color={controlAccentColor(accentPalette)}>
               <LuMoon />
             </Icon>
           </VStack>
         )}
 
         {job && (
-          <Stack gap="4">
+          <Stack gap="3">
             <HStack justify="space-between" align="center">
               <Stack gap="0">
                 <Text fontWeight="semibold">Job {job.job_id.slice(0, 8)}</Text>
@@ -783,13 +1044,15 @@ function ResultCard({ job }: ResultCardProps) {
                   {job.params.original_filename ?? "input audio"}
                 </Text>
               </Stack>
-              <Badge colorPalette={job.status === "failed" ? "red" : job.status === "completed" ? "green" : "purple"}>
+              <Badge colorPalette={job.status === "failed" ? "red" : job.status === "completed" ? "green" : accentPalette}
+                bg={job.status === "running" || job.status === "queued" ? controlSoftBg(accentPalette) : undefined}
+                color={job.status === "running" || job.status === "queued" ? controlAccentColor(accentPalette) : undefined}>
                 {job.status}
               </Badge>
             </HStack>
 
             {job.artifacts.final && (
-              <Box p="4" rounded="xl" bg="bg.subtle">
+              <Box p="3" rounded="xl" bg={panelInnerBg(accentPalette)}>
                 <Text mb="2" fontWeight="medium">
                   Final mix
                 </Text>
@@ -802,10 +1065,10 @@ function ResultCard({ job }: ResultCardProps) {
               </Box>
             )}
 
-            <SimpleGrid columns={{ base: 1, md: 3, xl: 1 }} gap="3">
-              <DownloadButton label="翻唱人声" href={job.artifacts.vocals} version={artifactVersion} />
-              <DownloadButton label="钢琴伴奏" href={job.artifacts.piano} version={artifactVersion} />
-              <DownloadButton label="最终混音" href={job.artifacts.final} version={artifactVersion} />
+            <SimpleGrid columns={{ base: 1, md: 3, xl: 1 }} gap="2">
+              <DownloadButton label="翻唱人声" href={job.artifacts.vocals} version={artifactVersion} accentPalette={accentPalette} />
+              <DownloadButton label="钢琴伴奏" href={job.artifacts.piano} version={artifactVersion} accentPalette={accentPalette} />
+              <DownloadButton label="最终混音" href={job.artifacts.final} version={artifactVersion} accentPalette={accentPalette} />
             </SimpleGrid>
           </Stack>
         )}
@@ -818,13 +1081,25 @@ function DownloadButton({
   label,
   href,
   version,
+  accentPalette,
 }: {
   label: string
   href?: string | null
   version: string
+  accentPalette: AccentPalette
 }) {
   return (
-    <Button asChild variant="outline" disabled={!href} justifyContent="space-between">
+    <Button
+      asChild
+      size="sm"
+      variant="outline"
+      colorPalette={accentPalette}
+      borderColor={controlSoftBg(accentPalette)}
+      color={controlAccentColor(accentPalette)}
+      _hover={{ bg: controlSoftBg(accentPalette) }}
+      disabled={!href}
+      justifyContent="space-between"
+    >
       <Link href={href ? artifactUrl(href, version) : undefined} download>
         {label}
         <LuDownload />
@@ -835,7 +1110,7 @@ function DownloadButton({
 
 function apiUrl(path: string) {
   if (path.startsWith("http://") || path.startsWith("https://")) return path
-  return `${API_BASE}${path}`
+  return `${_apiBase}${path}`
 }
 
 function artifactUrl(path: string, version: string) {
