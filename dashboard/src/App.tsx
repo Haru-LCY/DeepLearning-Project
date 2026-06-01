@@ -165,22 +165,16 @@ const CHARACTER_IMAGE_POSITIONS: Partial<Record<CharacterRoleId, string>> = {
   tomorin: "center top",
 }
 
-function panelCardBg(accentPalette: AccentPalette) {
-  return accentPalette === "red" ? "rgba(42, 8, 12, 0.92)" : "rgba(255, 255, 255, 0.78)"
+function surfacePanelBg(isDarkMode: boolean) {
+  return isDarkMode ? "#000000" : "#ffffff"
 }
 
-function panelBorderColor(accentPalette: AccentPalette) {
-  return accentPalette === "red" ? "rgba(248, 113, 113, 0.30)" : "rgba(147, 197, 253, 0.42)"
+function surfacePanelBorderColor(isDarkMode: boolean) {
+  return isDarkMode ? "rgba(255, 255, 255, 0.16)" : "rgba(0, 0, 0, 0.12)"
 }
 
-function panelBodyBg(accentPalette: AccentPalette) {
-  return accentPalette === "red"
-    ? "radial-gradient(circle at 18% 0%, rgba(92, 18, 24, 0.46), transparent 34%), radial-gradient(circle at 84% 12%, rgba(52, 9, 12, 0.66), transparent 30%), linear-gradient(180deg, rgba(45, 9, 13, 0.94), rgba(20, 7, 10, 0.98))"
-    : "radial-gradient(circle at 20% 0%, rgba(191, 219, 254, 0.45), transparent 34%), radial-gradient(circle at 82% 8%, rgba(219, 234, 254, 0.34), transparent 28%), linear-gradient(180deg, rgba(248, 250, 252, 0.62), rgba(240, 249, 255, 0.48))"
-}
-
-function panelInnerBg(accentPalette: AccentPalette) {
-  return accentPalette === "red" ? "rgba(37, 7, 10, 0.56)" : "rgba(240, 249, 255, 0.66)"
+function surfacePanelInnerBg(isDarkMode: boolean) {
+  return isDarkMode ? "#000000" : "#ffffff"
 }
 
 function controlSolidBg(accentPalette: AccentPalette) {
@@ -203,10 +197,6 @@ function App() {
   const { colorMode } = useColorMode()
   const isDarkMode = colorMode === "dark"
   const accentPalette: AccentPalette = isDarkMode ? "red" : "blue"
-  const pageGradient = isDarkMode
-    ? "radial-gradient(circle at 18% 0%, rgba(127, 29, 29, 0.26), transparent 34%), radial-gradient(circle at 84% 8%, rgba(69, 10, 10, 0.46), transparent 30%), linear-gradient(180deg, rgba(17, 7, 10, 0.98), rgba(36, 7, 12, 0.94))"
-    : "radial-gradient(circle at 15% 8%, rgba(186, 230, 253, 0.42), transparent 34%), radial-gradient(circle at 88% 0%, rgba(219, 234, 254, 0.48), transparent 30%), radial-gradient(circle at 50% 110%, rgba(125, 211, 252, 0.22), transparent 34%)"
-
   const [apiBase, setApiBase] = useState(loadApiBase)
 
   const [config, setConfig] = useState<BackendConfig>(FALLBACK_CONFIG)
@@ -393,20 +383,13 @@ function App() {
   }
 
   return (
-    <Box minH="100vh" bg={isDarkMode ? "#100709" : "bg"} color="fg" position="relative" overflow="hidden">
-      <Box
-        position="absolute"
-        inset="0"
-        bg={pageGradient}
-        pointerEvents="none"
-      />
-
+    <Box minH="100vh" bg={isDarkMode ? "#000000" : "#ffffff"} color="fg" position="relative" overflow="hidden">
       <Container maxW="7xl" pt={{ base: 3, md: 4 }} pb={{ base: 5, md: 8 }} position="relative">
         <Stack gap={{ base: 4, md: 5 }}>
           <Grid templateColumns={{ base: "1fr", xl: "1.18fr 0.82fr" }} gap="6">
             <GridItem>
               <Stack gap="6">
-                <WorkflowCard job={job} stages={config.stages} accentPalette={accentPalette} />
+                <WorkflowCard job={job} stages={config.stages} accentPalette={accentPalette} isDarkMode={isDarkMode} />
                 <RolePicker
                   roles={config.roles}
                   value={selectedRole}
@@ -437,6 +420,7 @@ function App() {
                   onSubmit={handleSubmit}
                   onRemix={handleRemix}
                   accentPalette={accentPalette}
+                  isDarkMode={isDarkMode}
                 />
                 <UploadCard
                   audioFile={audioFile}
@@ -444,8 +428,9 @@ function App() {
                   onFileChange={handleAudioFileChange}
                   disabled={isRunning}
                   accentPalette={accentPalette}
+                  isDarkMode={isDarkMode}
                 />
-                <ResultCard job={job} accentPalette={accentPalette} />
+                <ResultCard job={job} accentPalette={accentPalette} isDarkMode={isDarkMode} />
               </Stack>
             </GridItem>
           </Grid>
@@ -479,9 +464,10 @@ type WorkflowCardProps = {
   job: Job | null
   stages: BackendConfig["stages"]
   accentPalette: AccentPalette
+  isDarkMode: boolean
 }
 
-function WorkflowCard({ job, stages, accentPalette }: WorkflowCardProps) {
+function WorkflowCard({ job, stages, accentPalette, isDarkMode }: WorkflowCardProps) {
   const activeStep = Math.max((job?.stage ?? 1) - 1, 0)
   const progress = job?.progress ?? 0
   const running = job?.status === "running" || job?.status === "queued"
@@ -489,9 +475,9 @@ function WorkflowCard({ job, stages, accentPalette }: WorkflowCardProps) {
   return (
     <Card.Root
       overflow="hidden"
-      bg={panelCardBg(accentPalette)}
+      bg={surfacePanelBg(isDarkMode)}
       borderWidth="1px"
-      borderColor={panelBorderColor(accentPalette)}
+      borderColor={surfacePanelBorderColor(isDarkMode)}
       shadow="sm"
     >
       <Card.Header pb="3">
@@ -502,7 +488,7 @@ function WorkflowCard({ job, stages, accentPalette }: WorkflowCardProps) {
           {running && <Spinner size="sm" color={controlAccentColor(accentPalette)} />}
         </HStack>
       </Card.Header>
-      <Card.Body gap="5" bg={panelBodyBg(accentPalette)}>
+      <Card.Body gap="5" bg={surfacePanelBg(isDarkMode)}>
         <Steps.Root step={activeStep} count={stages.length} colorPalette={accentPalette} size="sm">
           <Steps.List>
             {stages.map((stage, index) => {
@@ -553,21 +539,22 @@ type UploadCardProps = {
   onFileChange: (file: File | null) => void
   disabled: boolean
   accentPalette: AccentPalette
+  isDarkMode: boolean
 }
 
-function UploadCard({ audioFile, previewUrl, onFileChange, disabled, accentPalette }: UploadCardProps) {
+function UploadCard({ audioFile, previewUrl, onFileChange, disabled, accentPalette, isDarkMode }: UploadCardProps) {
   return (
     <Card.Root
       overflow="hidden"
-      bg={panelCardBg(accentPalette)}
+      bg={surfacePanelBg(isDarkMode)}
       borderWidth="1px"
-      borderColor={panelBorderColor(accentPalette)}
+      borderColor={surfacePanelBorderColor(isDarkMode)}
       shadow="sm"
     >
       <Card.Header py="3" pb="2">
         <Card.Title>上传输入音频</Card.Title>
       </Card.Header>
-      <Card.Body pt="2" bg={panelBodyBg(accentPalette)}>
+      <Card.Body pt="2" bg={surfacePanelBg(isDarkMode)}>
         <FileUpload.Root
           accept={["audio/*"]}
           maxFiles={1}
@@ -576,7 +563,7 @@ function UploadCard({ audioFile, previewUrl, onFileChange, disabled, accentPalet
           alignItems="stretch"
         >
           <FileUpload.HiddenInput />
-          <FileUpload.Dropzone minH="92px" py="2" borderStyle="dashed" borderColor={panelBorderColor(accentPalette)} bg={panelInnerBg(accentPalette)}>
+          <FileUpload.Dropzone minH="92px" py="2" borderStyle="dashed" borderColor={surfacePanelBorderColor(isDarkMode)} bg={surfacePanelInnerBg(isDarkMode)}>
             <Icon fontSize="xl" color={controlAccentColor(accentPalette)}>
               <LuUpload />
             </Icon>
@@ -588,7 +575,7 @@ function UploadCard({ audioFile, previewUrl, onFileChange, disabled, accentPalet
         </FileUpload.Root>
 
         {audioFile && (
-          <Stack mt="2" p="2" rounded="lg" bg={panelInnerBg(accentPalette)} gap="1">
+          <Stack mt="2" p="2" rounded="lg" bg={surfacePanelInnerBg(isDarkMode)} gap="1">
             <HStack gap="3">
               <Icon color={controlAccentColor(accentPalette)}>
                 <LuFileAudio />
@@ -642,15 +629,15 @@ function RolePicker({ roles, value, onChange, disabled }: RolePickerProps) {
   return (
     <Card.Root
       overflow="hidden"
-      bg={panelCardBg(isDarkMode ? "red" : "blue")}
+      bg={surfacePanelBg(isDarkMode)}
       borderWidth="1px"
-      borderColor={panelBorderColor(isDarkMode ? "red" : "blue")}
+      borderColor={surfacePanelBorderColor(isDarkMode)}
       shadow="sm"
     >
       <Card.Header pb="3">
         <Card.Title>选择翻唱角色</Card.Title>
       </Card.Header>
-      <Card.Body bg={panelBodyBg(isDarkMode ? "red" : "blue")}>
+      <Card.Body bg={surfacePanelBg(isDarkMode)}>
         <SimpleGrid columns={{ base: 1, md: 2, xl: 4 }} gap={{ base: 3, md: 4 }}>
           {visibleRoles.map((role) => {
             const roleId = role.id as CharacterRoleId
@@ -676,10 +663,10 @@ function RolePicker({ roles, value, onChange, disabled }: RolePickerProps) {
                 p="0"
                 overflow="hidden"
                 rounded="2xl"
-                borderWidth={selected ? "3px" : "2px"}
+                borderWidth={selected ? "4px" : "2px"}
                 borderColor={
                   selected
-                    ? isDarkMode ? "#7f1d1d" : "blue.500"
+                    ? isDarkMode ? "#b45353" : "blue.500"
                     : isDarkMode ? "rgba(248, 113, 113, 0.30)" : "rgba(147, 197, 253, 0.48)"
                 }
                 bg={
@@ -700,7 +687,7 @@ function RolePicker({ roles, value, onChange, disabled }: RolePickerProps) {
                     ? undefined
                     : {
                         transform: "translateY(-2px)",
-                        borderColor: selected ? isDarkMode ? "#7f1d1d" : "blue.500" : isDarkMode ? "#b45353" : "blue.300",
+                        borderColor: selected ? isDarkMode ? "#b45353" : "blue.500" : isDarkMode ? "#b45353" : "blue.300",
                       }
                 }
                 _focusVisible={{
@@ -779,6 +766,7 @@ type ControlPanelProps = {
   onSubmit: () => void
   onRemix: () => void
   accentPalette: AccentPalette
+  isDarkMode: boolean
 }
 
 function ControlPanel(props: ControlPanelProps) {
@@ -797,14 +785,15 @@ function ControlPanel(props: ControlPanelProps) {
     onSubmit,
     onRemix,
     accentPalette,
+    isDarkMode,
   } = props
 
   return (
     <Card.Root
       overflow="hidden"
-      bg={panelCardBg(accentPalette)}
+      bg={surfacePanelBg(isDarkMode)}
       borderWidth="1px"
-      borderColor={panelBorderColor(accentPalette)}
+      borderColor={surfacePanelBorderColor(isDarkMode)}
       shadow="sm"
     >
       <Card.Header py="3" pb="2">
@@ -817,7 +806,7 @@ function ControlPanel(props: ControlPanelProps) {
           </Icon>
         </HStack>
       </Card.Header>
-      <Card.Body pt="2" pb="3" gap="4" bg={panelBodyBg(accentPalette)}>
+      <Card.Body pt="2" pb="3" gap="4" bg={surfacePanelBg(isDarkMode)}>
         <Stack gap="4">
           <ParameterSlider
             label="升降 Key"
@@ -858,7 +847,7 @@ function ControlPanel(props: ControlPanelProps) {
           />
         </Stack>
       </Card.Body>
-      <Card.Footer pt="2" flexDir="column" alignItems="stretch" gap="2" bg={panelBodyBg(accentPalette)}>
+      <Card.Footer pt="2" flexDir="column" alignItems="stretch" gap="2" bg={surfacePanelBg(isDarkMode)}>
         <Button
           size="md"
           colorPalette={accentPalette}
@@ -1001,17 +990,18 @@ function ParameterSlider({
 type ResultCardProps = {
   job: Job | null
   accentPalette: AccentPalette
+  isDarkMode: boolean
 }
 
-function ResultCard({ job, accentPalette }: ResultCardProps) {
+function ResultCard({ job, accentPalette, isDarkMode }: ResultCardProps) {
   const artifactVersion = job?.updated_at ?? `${job?.progress ?? 0}`
 
   return (
     <Card.Root
       overflow="hidden"
-      bg={panelCardBg(accentPalette)}
+      bg={surfacePanelBg(isDarkMode)}
       borderWidth="1px"
-      borderColor={panelBorderColor(accentPalette)}
+      borderColor={surfacePanelBorderColor(isDarkMode)}
       shadow="sm"
     >
       <Card.Header py="3" pb="2">
@@ -1026,7 +1016,7 @@ function ResultCard({ job, accentPalette }: ResultCardProps) {
           )}
         </HStack>
       </Card.Header>
-      <Card.Body pt="2" gap="3" bg={panelBodyBg(accentPalette)}>
+      <Card.Body pt="2" gap="3" bg={surfacePanelBg(isDarkMode)}>
         {!job && (
           <VStack py="3" gap="2" color="fg.muted">
             <Icon fontSize="2xl" color={controlAccentColor(accentPalette)}>
@@ -1052,7 +1042,7 @@ function ResultCard({ job, accentPalette }: ResultCardProps) {
             </HStack>
 
             {job.artifacts.final && (
-              <Box p="3" rounded="xl" bg={panelInnerBg(accentPalette)}>
+              <Box p="3" rounded="xl" bg={surfacePanelInnerBg(isDarkMode)}>
                 <Text mb="2" fontWeight="medium">
                   Final mix
                 </Text>
