@@ -31,6 +31,72 @@ class DDSPRuntime:
     args: Any
     units_encoder: Any
     pitch_extractor: str
+    f0_extractor: Any | None
+
+
+def _move_torch_object(obj: Any, device: str) -> Any:
+    if obj is None:
+        return None
+
+    mover = getattr(obj, "to", None)
+    if callable(mover):
+        moved = mover(device)
+        if moved is not None:
+            obj = moved
+    return obj
+
+
+def _move_attr(obj: Any, attr: str, device: str) -> None:
+    if obj is None or not hasattr(obj, attr):
+        return
+    setattr(obj, attr, _move_torch_object(getattr(obj, attr), device))
+
+
+def _move_mapping_values(mapping: Any, device: str) -> None:
+    if not isinstance(mapping, dict):
+        return
+    for key, value in list(mapping.items()):
+        mapping[key] = _move_torch_object(value, device)
+
+
+def _move_stft_cache(stft: Any, device: str) -> None:
+    if stft is None:
+        return
+    _move_mapping_values(getattr(stft, "mel_basis", None), device)
+    _move_mapping_values(getattr(stft, "hann_window", None), device)
+
+
+def _move_ddsp_vocoder(vocoder: Any, device: str) -> None:
+    if vocoder is None:
+        return
+
+    vocoder.device = device
+    _move_mapping_values(getattr(vocoder, "resample_kernel", None), device)
+
+    inner_vocoder = getattr(vocoder, "vocoder", None)
+    if inner_vocoder is not None:
+        inner_vocoder.device = device
+        _move_torch_object(inner_vocoder, device)
+        _move_attr(inner_vocoder, "model", device)
+        _move_stft_cache(getattr(inner_vocoder, "stft", None), device)
+
+
+def _move_units_encoder(units_encoder: Any, device: str) -> None:
+    if units_encoder is None:
+        return
+
+    units_encoder.device = device
+    _move_mapping_values(getattr(units_encoder, "resample_kernel", None), device)
+
+    model = getattr(units_encoder, "model", None)
+    if model is None:
+        return
+
+    _move_torch_object(model, device)
+    if hasattr(model, "device"):
+        model.device = device
+    for attr in ("hubert", "model", "proj", "fcpe"):
+        _move_attr(model, attr, device)
 
 
 def _configure_imports() -> None:
@@ -82,6 +148,7 @@ def load_ddsp_runtime(model_ckpt: Path, device: str, pitch_extractor: str) -> DD
         vocoder_key = (args.vocoder.type, str(Path(hifigan.model_path).resolve()), device)
         if vocoder_key in _DDSP_VOCODER_CACHE:
             vocoder = _DDSP_VOCODER_CACHE[vocoder_key]
+            _move_ddsp_vocoder(vocoder, device)
         else:
             if getattr(hifigan, "model", None) is None:
                 hifigan.model, hifigan.h = load_hifigan_model(hifigan.model_path, device=hifigan.device)
@@ -102,6 +169,7 @@ def load_ddsp_runtime(model_ckpt: Path, device: str, pitch_extractor: str) -> DD
         )
         if units_encoder_key in _DDSP_UNITS_ENCODER_CACHE:
             units_encoder = _DDSP_UNITS_ENCODER_CACHE[units_encoder_key]
+            _move_units_encoder(units_encoder, device)
         else:
             units_encoder = Units_Encoder(
                 args.data.encoder,
@@ -112,7 +180,7 @@ def load_ddsp_runtime(model_ckpt: Path, device: str, pitch_extractor: str) -> DD
                 device=device,
             )
             _DDSP_UNITS_ENCODER_CACHE[units_encoder_key] = units_encoder
-        preload_ddsp_pitch_extractor(pitch_extractor, device)
+        f0_extractor = preload_ddsp_pitch_extractor(pitch_extractor, device)
 
     return DDSPRuntime(
         model_ckpt=model_ckpt,
@@ -122,6 +190,7 @@ def load_ddsp_runtime(model_ckpt: Path, device: str, pitch_extractor: str) -> DD
         args=args,
         units_encoder=units_encoder,
         pitch_extractor=pitch_extractor,
+        f0_extractor=f0_extractor,
     )
 
 
@@ -190,13 +259,20 @@ def run_ddsp_inprocess(
             f0 = np.load(f0_cache_path, allow_pickle=False)
         else:
             print("Pitch extractor type: " + pitch_extractor)
-            f0_runtime = F0_Extractor(
-                pitch_extractor,
-                sample_rate,
-                hop_size,
-                float(f0_min),
-                float(f0_max),
-            )
+            f0_runtime = runtime.f0_extractor if pitch_extractor == runtime.pitch_extractor else None
+            if f0_runtime is None:
+                f0_runtime = F0_Extractor(
+                    pitch_extractor,
+                    sample_rate,
+                    hop_size,
+                    float(f0_min),
+                    float(f0_max),
+                )
+            else:
+                f0_runtime.sample_rate = sample_rate
+                f0_runtime.hop_size = hop_size
+                f0_runtime.f0_min = float(f0_min)
+                f0_runtime.f0_max = float(f0_max)
             print("Extracting the pitch curve of the input audio...")
             f0 = f0_runtime.extract(audio, uv_interp=True, device=device)
             np.save(f0_cache_path, f0, allow_pickle=False)
@@ -256,15 +332,16 @@ def run_ddsp_inprocess(
         segments = split(audio, sample_rate, hop_size)
         timings["split_audio"] = round(time.perf_counter() - start, 3)
         print(f'[T] split_audio: {timings["split_audio"]}s')
-        print("Cut the input audio into " + str(len(segments)) + " slices")
-        timings["n_segments"] = len(segments)
+        n_segments = len(segments)
+        print("Cut the input audio into " + str(n_segments) + " slices")
+        timings["n_segments"] = n_segments
 
         cum_units_encode = 0.0
         cum_model_forward = 0.0
         cum_vocoder_infer = 0.0
         cum_seg_loop = 0.0
 
-        with torch.no_grad():
+        with torch.inference_mode():
             for segment in tqdm(segments):
                 segment_start = time.perf_counter()
                 start_frame = segment[0]
@@ -274,8 +351,9 @@ def run_ddsp_inprocess(
                 seg_units = runtime.units_encoder.encode(seg_input, sample_rate, hop_size)
                 cum_units_encode += time.perf_counter() - units_start
 
-                seg_f0 = f0[:, start_frame : start_frame + seg_units.size(1), :]
-                seg_volume = volume[:, start_frame : start_frame + seg_units.size(1), :]
+                seg_frames = seg_units.size(1)
+                seg_f0 = f0[:, start_frame : start_frame + seg_frames, :]
+                seg_volume = volume[:, start_frame : start_frame + seg_frames, :]
 
                 model_start = time.perf_counter()
                 seg_mel = runtime.model(
@@ -293,14 +371,15 @@ def run_ddsp_inprocess(
                 cum_model_forward += time.perf_counter() - model_start
 
                 vocoder_start = time.perf_counter()
-                seg_output = runtime.vocoder.infer(seg_mel, seg_f0)
+                seg_output_tensor = runtime.vocoder.infer(seg_mel, seg_f0)
                 cum_vocoder_infer += time.perf_counter() - vocoder_start
 
-                seg_output *= mask[
+                seg_output_tensor *= mask[
                     :,
-                    start_frame * args.data.block_size : (start_frame + seg_units.size(1)) * args.data.block_size,
+                    start_frame * args.data.block_size : (start_frame + seg_frames) * args.data.block_size,
                 ]
-                seg_output = seg_output.squeeze().cpu().numpy()
+                seg_output = seg_output_tensor.squeeze().cpu().numpy()
+                del seg_input, seg_units, seg_f0, seg_volume, seg_mel, seg_output_tensor
 
                 silent_length = round(start_frame * args.data.block_size) - current_length
                 if silent_length >= 0:
@@ -310,13 +389,16 @@ def run_ddsp_inprocess(
                     result = cross_fade(result, seg_output, current_length + silent_length)
                 current_length = current_length + silent_length + len(seg_output)
                 cum_seg_loop += time.perf_counter() - segment_start
+                del seg_output
+
+        del f0, volume, mask, speaker_id, formant_shift, segments, audio
 
         timings["seg_loop_total"] = round(cum_seg_loop, 3)
         timings["units_encode_total"] = round(cum_units_encode, 3)
         timings["model_forward_total"] = round(cum_model_forward, 3)
         timings["vocoder_infer_total"] = round(cum_vocoder_infer, 3)
         timings["overhead"] = round(cum_seg_loop - cum_units_encode - cum_model_forward - cum_vocoder_infer, 3)
-        print(f'[T] seg_loop_total ({len(segments)} segs): {timings["seg_loop_total"]}s')
+        print(f'[T] seg_loop_total ({n_segments} segs): {timings["seg_loop_total"]}s')
         print(f'[T]   units_encode: {timings["units_encode_total"]}s')
         print(f'[T]   model_forward (DDSP+Reflow): {timings["model_forward_total"]}s')
         print(f'[T]   vocoder_infer: {timings["vocoder_infer_total"]}s')

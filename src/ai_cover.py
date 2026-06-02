@@ -2,7 +2,10 @@
 
 from __future__ import annotations
 
+from concurrent.futures import ThreadPoolExecutor, as_completed
+from contextlib import contextmanager
 from dataclasses import dataclass
+import gc
 import json
 import math
 import os
@@ -11,8 +14,9 @@ import shlex
 import shutil
 import subprocess
 import sys
+import threading
 import time
-from typing import Any, Callable
+from typing import Any, Callable, Iterator
 
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
@@ -34,6 +38,9 @@ DEFAULT_SOUNDFONT = REPO_ROOT / "assets" / "soundfonts" / "extracted" / "usr" / 
 DEFAULT_FLUIDSYNTH_BIN = REPO_ROOT / "assets" / "soundfonts" / "fluidsynth_pkg" / "usr" / "bin" / "fluidsynth"
 DEFAULT_FLUIDSYNTH_LIB_DIR = REPO_ROOT / "assets" / "soundfonts" / "runtime_libs" / "usr" / "lib" / "x86_64-linux-gnu"
 ProgressCallback = Callable[[str, int, str], None]
+USE_PARALLEL_COVER_STAGES = True
+_CUDA_STREAM_LOCK = threading.Lock()
+_CUDA_STREAMS: dict[tuple[str, str], Any] = {}
 
 
 @dataclass(frozen=True)
@@ -107,6 +114,117 @@ def _emit_progress(
 ) -> None:
     if progress_callback is not None:
         progress_callback(stage_name, progress, message)
+
+
+def _is_cuda_device(device: str | None) -> bool:
+    if device is None:
+        return False
+    try:
+        import torch
+
+        torch_device = torch.device(device)
+        return torch_device.type == "cuda" and torch.cuda.is_available()
+    except Exception:  # noqa: BLE001 - stream support is an optimization only
+        return False
+
+
+@contextmanager
+def _cuda_stream_context(device: str | None, branch_name: str) -> Iterator[None]:
+    if not _is_cuda_device(device):
+        yield
+        return
+
+    import torch
+
+    torch_device = torch.device(device)
+    with torch.cuda.device(torch_device):
+        stream = _get_cuda_stream(torch_device, branch_name)
+        stream.wait_stream(torch.cuda.current_stream(torch_device))
+        print(f"Using CUDA stream for {branch_name} branch on {torch_device}")
+        try:
+            with torch.cuda.stream(stream):
+                yield
+        finally:
+            stream.synchronize()
+
+
+def _get_cuda_stream(torch_device: Any, branch_name: str) -> Any:
+    key = (str(torch_device), branch_name)
+    with _CUDA_STREAM_LOCK:
+        stream = _CUDA_STREAMS.get(key)
+        if stream is None:
+            import torch
+
+            stream = torch.cuda.Stream(device=torch_device)
+            _CUDA_STREAMS[key] = stream
+        return stream
+
+
+def _component_device(component: Any | None, fallback: str | None) -> str | None:
+    if component is None:
+        return fallback
+    if isinstance(component, dict) and "device" in component:
+        return str(component["device"])
+    device = getattr(component, "device", None)
+    if device is not None:
+        return str(device)
+    private_device = getattr(component, "_device", None)
+    if private_device is not None:
+        return str(private_device)
+    return fallback
+
+
+def _cuda_branch_device(*devices: str | None) -> str | None:
+    for device in devices:
+        if _is_cuda_device(device):
+            return device
+    return None
+
+
+def _cleanup_cuda_memory(reason: str) -> None:
+    gc.collect()
+    try:
+        import torch
+
+        if not torch.cuda.is_available():
+            return
+        for device_index in range(torch.cuda.device_count()):
+            torch.cuda.synchronize(device_index)
+        torch.cuda.empty_cache()
+        if hasattr(torch.cuda, "ipc_collect"):
+            torch.cuda.ipc_collect()
+        print(f"Cleaned CUDA cache after {reason}")
+    except Exception as exc:  # noqa: BLE001 - cleanup must not hide pipeline errors
+        print(f"CUDA cleanup skipped after {reason}: {exc}")
+
+
+def _move_torch_object(obj: Any, device: str) -> Any:
+    if obj is None:
+        return None
+
+    mover = getattr(obj, "to", None)
+    if callable(mover):
+        moved = mover(device)
+        if moved is not None:
+            obj = moved
+    return obj
+
+
+def _move_demucs_separator(separator: Any | None, device: str, reason: str, strict: bool = True) -> None:
+    if separator is None:
+        return
+    try:
+        _move_torch_object(getattr(separator, "model", None), device)
+        updater = getattr(separator, "update_parameter", None)
+        if callable(updater):
+            updater(device=device, progress=False)
+        elif hasattr(separator, "_device"):
+            separator._device = device
+        print(f"Moved Demucs separator to {device} for {reason}")
+    except Exception as exc:  # noqa: BLE001 - device setup should not hide the primary stage error
+        if strict:
+            raise
+        print(f"Demucs separator move skipped for {reason}: {exc}")
 
 
 def _ffmpeg_runtime_env() -> dict[str, str] | None:
@@ -196,8 +314,8 @@ def run_demucs_inprocess(input_audio: Path, artifacts: CoverArtifacts, separator
     """Separate vocals with an already-loaded Demucs separator."""
     from demucs.api import save_audio
 
-    separator_device = getattr(separator, "_device", device)
-    separator.update_parameter(device=separator_device, progress=False)
+    separator_device = device
+    _move_demucs_separator(separator, separator_device, "Demucs stage")
     _, sources = separator.separate_audio_file(input_audio)
     if "vocals" not in sources:
         raise RuntimeError("Demucs did not return a vocals stem.")
@@ -207,13 +325,14 @@ def run_demucs_inprocess(input_audio: Path, artifacts: CoverArtifacts, separator
     if not accompaniment_sources:
         raise RuntimeError("Demucs did not return accompaniment stems.")
 
-    no_vocals = accompaniment_sources[0].clone()
-    for source in accompaniment_sources[1:]:
-        no_vocals += source
+    # no_vocals = accompaniment_sources[0].clone()
+    # for source in accompaniment_sources[1:]:
+    #     no_vocals += source
 
     artifacts.vocals.parent.mkdir(parents=True, exist_ok=True)
     save_audio(vocals, str(artifacts.vocals), samplerate=separator.samplerate)
-    save_audio(no_vocals, str(artifacts.no_vocals), samplerate=separator.samplerate)
+    # save_audio(no_vocals, str(artifacts.no_vocals), samplerate=separator.samplerate)
+    del vocals, accompaniment_sources, sources
 
 
 def resolve_ddsp_assets(model_ckpt: Path, repair: bool = True) -> None:
@@ -373,7 +492,7 @@ def run_pop2piano_inprocess(
         processor = preloaded_components["processor"]
         pop2piano_model = preloaded_components["model"]
 
-    pop2piano_model = pop2piano_model.to(resolved_device)
+    pop2piano_model = _move_torch_object(pop2piano_model, resolved_device)
     pop2piano_model.eval()
     timings["load_model"] = round(time.perf_counter() - start, 3)
     print(f'[T] load_model: {timings["load_model"]}s')
@@ -418,7 +537,7 @@ def run_pop2piano_inprocess(
     print(f'[T] preprocess: {timings["preprocess"]}s')
 
     start = time.perf_counter()
-    with torch.no_grad():
+    with torch.inference_mode():
         generated = pop2piano_model.generate(
             input_features=inputs["input_features"],
             attention_mask=inputs.get("attention_mask"),
@@ -434,6 +553,7 @@ def run_pop2piano_inprocess(
         key: value.cpu() if hasattr(value, "cpu") else value
         for key, value in inputs.items()
     }
+    del inputs
     decoded = processor.batch_decode(generated, feature_extractor_output=decoder_inputs)
     midi = decoded["pretty_midi_objects"][0]
     timings["decode"] = round(time.perf_counter() - start, 3)
@@ -543,6 +663,7 @@ def run_ai_piano_cover(
     soundfont: Path = DEFAULT_SOUNDFONT,
     fluidsynth_bin: Path = DEFAULT_FLUIDSYNTH_BIN,
     fluidsynth_lib_dir: Path = DEFAULT_FLUIDSYNTH_LIB_DIR,
+    use_parallel_stages: bool = USE_PARALLEL_COVER_STAGES,
     dry_run: bool = False,
     progress_callback: ProgressCallback | None = None,
 ) -> CoverRunResult:
@@ -599,132 +720,204 @@ def run_ai_piano_cover(
     stage_timings["preprocess"] = round(time.perf_counter() - stage_start, 3)
     _emit_progress(progress_callback, "separate_vocals", 10, "Preprocessed audio")
 
-    print("")
-    print("Stage 1: separate vocals with Demucs")
-    stage_start = time.perf_counter()
-    if demucs_separator is not None:
-        if dry_run:
-            print(f"Would run Demucs in-process with preloaded model -> {artifacts.vocals}")
-        else:
-            run_demucs_inprocess(artifacts.preprocessed_audio, artifacts, demucs_separator, device)
-            print(f"Vocals: {artifacts.vocals}")
-            print(f"No vocals: {artifacts.no_vocals}")
-    else:
-        _run(build_demucs_command(artifacts.preprocessed_audio, raw_demucs_root, device), dry_run=dry_run)
-        if not dry_run:
-            copy_demucs_outputs(artifacts.preprocessed_audio, raw_demucs_root, artifacts)
-            print(f"Vocals: {artifacts.vocals}")
-            print(f"No vocals: {artifacts.no_vocals}")
-    stage_timings["separate_vocals"] = round(time.perf_counter() - stage_start, 3)
-    _emit_progress(progress_callback, "separate_vocals", 25, "Separated vocals and accompaniment")
-
-    print("")
-    print("Stage 2: convert vocals with DDSP-SVC")
-    _emit_progress(progress_callback, "voice_conversion", 30, "Starting voice conversion")
-    stage_start = time.perf_counter()
-    if ddsp_runtime is not None:
-        if dry_run:
-            print(f"Would run DDSP-SVC in-process with preloaded model -> {artifacts.ddsp_vocals}")
-        else:
-            from src.ddsp_inprocess import run_ddsp_inprocess
-
-            run_ddsp_inprocess(
-                input_vocals=artifacts.vocals,
-                output_vocals=artifacts.ddsp_vocals,
-                runtime=ddsp_runtime,
-                spk_id=spk_id,
-                key=key,
-                pitch_extractor=pitch_extractor,
-                cache_dir=runtime_cache_dir,
-            )
-    else:
-        _run(
-            build_ddsp_command(
-                input_vocals=artifacts.vocals,
-                output_vocals=artifacts.ddsp_vocals,
-                model_ckpt=ddsp_model_ckpt,
-                device=device,
-                spk_id=spk_id,
-                key=key,
-                pitch_extractor=pitch_extractor,
-                cache_dir=runtime_cache_dir,
-            ),
-            dry_run=dry_run,
-        )
-    stage_timings["voice_conversion"] = round(time.perf_counter() - stage_start, 3)
-    _emit_progress(progress_callback, "voice_conversion", 50, "Converted vocals")
-
-    print("")
-    print("Stage 3: generate Pop2Piano accompaniment")
-    _emit_progress(progress_callback, "piano_cover", 55, "Starting piano cover generation")
     pop2piano_input_audio = artifacts.preprocessed_audio if pre_pitch_shift != 0.0 else input_audio
-    stage_start = time.perf_counter()
-    if pop2piano_components is not None:
-        if dry_run:
-            print(f"Would run Pop2Piano in-process with preloaded model -> {artifacts.piano_midi}")
-        else:
-            run_pop2piano_inprocess(
-                input_audio=pop2piano_input_audio,
-                output_midi=artifacts.piano_midi,
-                model=pop2piano_model,
-                composer=pop2piano_composer,
-                device=pop2piano_device,
-                max_length=pop2piano_max_length,
-                beat_checkpoint=pop2piano_beat_checkpoint,
-                preloaded_components=pop2piano_components,
+
+    def run_vocal_branch() -> dict[str, float]:
+        branch_timings: dict[str, float] = {}
+        stream_device = (
+            _cuda_branch_device(
+                _component_device(ddsp_runtime, None),
+                _component_device(demucs_separator, None),
+                device,
             )
+            if use_parallel_stages and (demucs_separator is not None or ddsp_runtime is not None)
+            else None
+        )
+        with _cuda_stream_context(stream_device, "vocal"):
+            print("")
+            print("Stage 1: separate vocals with Demucs")
+            _emit_progress(progress_callback, "separate_vocals", 15, "Separating vocals")
+            stage_start = time.perf_counter()
+            if demucs_separator is not None:
+                if dry_run:
+                    print(f"Would run Demucs in-process with preloaded model -> {artifacts.vocals}")
+                else:
+                    run_demucs_inprocess(artifacts.preprocessed_audio, artifacts, demucs_separator, device)
+                    print(f"Vocals: {artifacts.vocals}")
+                    # print(f"No vocals: {artifacts.no_vocals}")
+            else:
+                _run(build_demucs_command(artifacts.preprocessed_audio, raw_demucs_root, device), dry_run=dry_run)
+                if not dry_run:
+                    copy_demucs_outputs(artifacts.preprocessed_audio, raw_demucs_root, artifacts)
+                    print(f"Vocals: {artifacts.vocals}")
+                    print(f"No vocals: {artifacts.no_vocals}")
+            branch_timings["separate_vocals"] = round(time.perf_counter() - stage_start, 3)
+            _emit_progress(progress_callback, "separate_vocals", 25, "Separated vocals and accompaniment")
+            if not use_parallel_stages:
+                _cleanup_cuda_memory("Demucs stage")
+
+            print("")
+            print("Stage 2: convert vocals with DDSP-SVC")
+            _emit_progress(progress_callback, "voice_conversion", 30, "Starting voice conversion")
+            stage_start = time.perf_counter()
+            if ddsp_runtime is not None:
+                if dry_run:
+                    print(f"Would run DDSP-SVC in-process with preloaded model -> {artifacts.ddsp_vocals}")
+                else:
+                    from src.ddsp_inprocess import run_ddsp_inprocess
+
+                    run_ddsp_inprocess(
+                        input_vocals=artifacts.vocals,
+                        output_vocals=artifacts.ddsp_vocals,
+                        runtime=ddsp_runtime,
+                        spk_id=spk_id,
+                        key=key,
+                        pitch_extractor=pitch_extractor,
+                        cache_dir=runtime_cache_dir,
+                    )
+            else:
+                _run(
+                    build_ddsp_command(
+                        input_vocals=artifacts.vocals,
+                        output_vocals=artifacts.ddsp_vocals,
+                        model_ckpt=ddsp_model_ckpt,
+                        device=device,
+                        spk_id=spk_id,
+                        key=key,
+                        pitch_extractor=pitch_extractor,
+                        cache_dir=runtime_cache_dir,
+                    ),
+                    dry_run=dry_run,
+                )
+            branch_timings["voice_conversion"] = round(time.perf_counter() - stage_start, 3)
+            _emit_progress(progress_callback, "voice_conversion", 50, "Converted vocals")
+            if not use_parallel_stages:
+                _cleanup_cuda_memory("DDSP stage")
+        return branch_timings
+
+    def run_piano_branch() -> dict[str, float]:
+        branch_timings: dict[str, float] = {}
+        stream_device = (
+            _cuda_branch_device(_component_device(pop2piano_components, None), pop2piano_device)
+            if use_parallel_stages and pop2piano_components is not None
+            else None
+        )
+        with _cuda_stream_context(stream_device, "piano"):
+            print("")
+            print("Stage 3: generate Pop2Piano accompaniment")
+            _emit_progress(progress_callback, "piano_cover", 55, "Starting piano cover generation")
+            stage_start = time.perf_counter()
+            if pop2piano_components is not None:
+                if dry_run:
+                    print(f"Would run Pop2Piano in-process with preloaded model -> {artifacts.piano_midi}")
+                else:
+                    run_pop2piano_inprocess(
+                        input_audio=pop2piano_input_audio,
+                        output_midi=artifacts.piano_midi,
+                        model=pop2piano_model,
+                        composer=pop2piano_composer,
+                        device=pop2piano_device,
+                        max_length=pop2piano_max_length,
+                        beat_checkpoint=pop2piano_beat_checkpoint,
+                        preloaded_components=pop2piano_components,
+                    )
+            else:
+                _run(
+                    build_pop2piano_command(
+                        input_audio=pop2piano_input_audio,
+                        output_midi=artifacts.piano_midi,
+                        model=pop2piano_model,
+                        composer=pop2piano_composer,
+                        device=pop2piano_device,
+                        max_length=pop2piano_max_length,
+                        cache_dir=runtime_cache_dir,
+                    ),
+                    dry_run=dry_run,
+                )
+            branch_timings["piano_cover"] = round(time.perf_counter() - stage_start, 3)
+            _emit_progress(progress_callback, "piano_cover", 72, "Generated piano MIDI")
+            if not use_parallel_stages:
+                _cleanup_cuda_memory("Pop2Piano stage")
+
+            print("")
+            print("Stage 4: render piano MIDI to WAV")
+            _emit_progress(progress_callback, "piano_cover", 75, "Rendering piano audio")
+            stage_start = time.perf_counter()
+            if not dry_run:
+                from src.render import render_midi_to_wav
+
+                render_midi_to_wav(
+                    input_midi=artifacts.piano_midi,
+                    output_wav=artifacts.piano_wav,
+                    soundfont_path=soundfont,
+                    fluidsynth_bin=fluidsynth_bin,
+                    fluidsynth_lib_dir=fluidsynth_lib_dir,
+                )
+                print(f"Piano WAV: {artifacts.piano_wav}")
+            else:
+                print(f"Would render {artifacts.piano_midi} -> {artifacts.piano_wav}")
+            branch_timings["render_piano"] = round(time.perf_counter() - stage_start, 3)
+            _emit_progress(progress_callback, "piano_cover", 85, "Rendered piano audio")
+        return branch_timings
+
+    if use_parallel_stages:
+        print("")
+        print("Running Stage 1+2 and Stage 3+4 in parallel")
+        _emit_progress(progress_callback, "separate_vocals", 12, "Starting vocal and piano branches in parallel")
+        parallel_start = time.perf_counter()
+        branch_errors: list[tuple[str, Exception]] = []
+        with ThreadPoolExecutor(max_workers=2, thread_name_prefix="cover-branch") as executor:
+            futures = {
+                executor.submit(run_vocal_branch): "vocal",
+                executor.submit(run_piano_branch): "piano",
+            }
+            for future in as_completed(futures):
+                branch_name = futures[future]
+                try:
+                    stage_timings.update(future.result())
+                except Exception as exc:  # noqa: BLE001 - re-raised with branch context
+                    branch_errors.append((branch_name, exc))
+
+        stage_timings["parallel_branches"] = round(time.perf_counter() - parallel_start, 3)
+        if branch_errors:
+            branch_name, exc = branch_errors[0]
+            _cleanup_cuda_memory(f"{branch_name} branch failure")
+            raise RuntimeError(f"{branch_name} branch failed: {exc}") from exc
     else:
-        _run(
-            build_pop2piano_command(
-                input_audio=pop2piano_input_audio,
-                output_midi=artifacts.piano_midi,
-                model=pop2piano_model,
-                composer=pop2piano_composer,
-                device=pop2piano_device,
-                max_length=pop2piano_max_length,
-                cache_dir=runtime_cache_dir,
-            ),
+        print("")
+        print("Running Stage 1+2 and Stage 3+4 sequentially")
+        _emit_progress(progress_callback, "separate_vocals", 12, "Starting vocal and piano branches sequentially")
+        branch_start = time.perf_counter()
+        try:
+            stage_timings.update(run_vocal_branch())
+            _cleanup_cuda_memory("vocal branch")
+            stage_timings.update(run_piano_branch())
+            _cleanup_cuda_memory("piano branch")
+        except Exception as exc:  # noqa: BLE001 - re-raised with branch context
+            _cleanup_cuda_memory("sequential branch failure")
+            raise RuntimeError(f"sequential branch failed: {exc}") from exc
+        stage_timings["sequential_branches"] = round(time.perf_counter() - branch_start, 3)
+
+    try:
+        print("")
+        print("Stage 5: mix DDSP vocals with piano accompaniment")
+        _emit_progress(progress_callback, "merge", 90, "Starting final mix")
+        stage_start = time.perf_counter()
+        mix_cover_audio(
+            vocals_audio=artifacts.ddsp_vocals,
+            piano_audio=artifacts.piano_wav,
+            output_audio=artifacts.final_mix,
+            vocals_volume=vocals_volume,
+            piano_volume=piano_volume,
             dry_run=dry_run,
         )
-    stage_timings["piano_cover"] = round(time.perf_counter() - stage_start, 3)
-    _emit_progress(progress_callback, "piano_cover", 72, "Generated piano MIDI")
+        stage_timings["merge"] = round(time.perf_counter() - stage_start, 3)
+        stage_timings["total"] = round(time.perf_counter() - total_start, 3)
+        if not dry_run:
+            timings_path = output_root / "timings.json"
+            timings_path.write_text(json.dumps(stage_timings, indent=2), encoding="utf-8")
+        _emit_progress(progress_callback, "completed", 100, "Cover pipeline completed")
 
-    print("")
-    print("Stage 4: render piano MIDI to WAV")
-    stage_start = time.perf_counter()
-    if not dry_run:
-        from src.render import render_midi_to_wav
-
-        render_midi_to_wav(
-            input_midi=artifacts.piano_midi,
-            output_wav=artifacts.piano_wav,
-            soundfont_path=soundfont,
-            fluidsynth_bin=fluidsynth_bin,
-            fluidsynth_lib_dir=fluidsynth_lib_dir,
-        )
-        print(f"Piano WAV: {artifacts.piano_wav}")
-    else:
-        print(f"Would render {artifacts.piano_midi} -> {artifacts.piano_wav}")
-    stage_timings["render_piano"] = round(time.perf_counter() - stage_start, 3)
-    _emit_progress(progress_callback, "piano_cover", 85, "Rendered piano audio")
-
-    print("")
-    print("Stage 5: mix DDSP vocals with piano accompaniment")
-    _emit_progress(progress_callback, "merge", 90, "Starting final mix")
-    stage_start = time.perf_counter()
-    mix_cover_audio(
-        vocals_audio=artifacts.ddsp_vocals,
-        piano_audio=artifacts.piano_wav,
-        output_audio=artifacts.final_mix,
-        vocals_volume=vocals_volume,
-        piano_volume=piano_volume,
-        dry_run=dry_run,
-    )
-    stage_timings["merge"] = round(time.perf_counter() - stage_start, 3)
-    stage_timings["total"] = round(time.perf_counter() - total_start, 3)
-    if not dry_run:
-        timings_path = output_root / "timings.json"
-        timings_path.write_text(json.dumps(stage_timings, indent=2), encoding="utf-8")
-    _emit_progress(progress_callback, "completed", 100, "Cover pipeline completed")
-
-    return CoverRunResult(artifacts=artifacts, stage_timings=stage_timings)
+        return CoverRunResult(artifacts=artifacts, stage_timings=stage_timings)
+    finally:
+        _cleanup_cuda_memory("cover pipeline")

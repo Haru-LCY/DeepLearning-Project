@@ -25,6 +25,7 @@ from src.ai_cover import (
     DEFAULT_POP2PIANO_BEAT_CHECKPOINT,
     DEFAULT_POP2PIANO_MODEL,
     DEFAULT_SOUNDFONT,
+    USE_PARALLEL_COVER_STAGES,
     run_ai_piano_cover,
 )
 
@@ -81,6 +82,20 @@ def parse_args() -> argparse.Namespace:
         type=Path,
         help="FluidSynth runtime library directory.",
     )
+    parallel_group = parser.add_mutually_exclusive_group()
+    parallel_group.add_argument(
+        "--parallel-stages",
+        dest="use_parallel_stages",
+        action="store_true",
+        default=USE_PARALLEL_COVER_STAGES,
+        help="Run vocal and piano branches in parallel.",
+    )
+    parallel_group.add_argument(
+        "--no-parallel-stages",
+        dest="use_parallel_stages",
+        action="store_false",
+        help="Run vocal and piano branches sequentially.",
+    )
     parser.add_argument("--dry-run", action="store_true", help="Print commands without running them.")
     return parser.parse_args()
 
@@ -106,6 +121,7 @@ def main() -> None:
         soundfont=args.soundfont,
         fluidsynth_bin=args.fluidsynth_bin,
         fluidsynth_lib_dir=args.fluidsynth_lib_dir,
+        use_parallel_stages=args.use_parallel_stages,
         dry_run=args.dry_run,
     )
     artifacts = result.artifacts

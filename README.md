@@ -73,3 +73,9 @@ assets/output/cover/final/sample_ai_cover_piano.wav
 ```
 
 The previous audio-to-MIDI / PianistTransformer workflow is documented in `docs/audio_to_midi_legacy.zh.md`.
+
+Use parallel or not:
+
+```bash
+--parallel-stages / --no-parallel-stages
+```

@@ -100,6 +100,7 @@ def _run_startup_warmup(registry: ModelRegistry) -> None:
         soundfont=runtime.soundfont,
         fluidsynth_bin=runtime.fluidsynth_bin,
         fluidsynth_lib_dir=runtime.fluidsynth_lib_dir,
+        use_parallel_stages=runtime.use_parallel_stages,
     )
 
 

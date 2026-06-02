@@ -252,6 +252,7 @@ class JobManager:
                 soundfont=self.runtime.soundfont,
                 fluidsynth_bin=self.runtime.fluidsynth_bin,
                 fluidsynth_lib_dir=self.runtime.fluidsynth_lib_dir,
+                use_parallel_stages=self.runtime.use_parallel_stages,
                 progress_callback=lambda stage_name, progress, message: self._handle_progress(
                     job_id, stage_name, progress, message
                 ),
@@ -298,14 +299,23 @@ class JobManager:
         return runtime
 
     def _handle_progress(self, job_id: str, stage_name: str, progress: int, message: str) -> None:
-        self._update(
-            job_id,
-            status="running" if stage_name != "completed" else "running",
-            stage=STAGE_NUMBERS.get(stage_name),
-            stage_name=stage_name,
-            progress=progress,
-            message=message,
-        )
+        next_stage = STAGE_NUMBERS.get(stage_name)
+        with self._lock:
+            record = self._jobs[job_id]
+            if progress < record.progress:
+                progress = record.progress
+                stage_name = record.stage_name or stage_name
+                message = record.message
+            if next_stage is None:
+                next_stage = record.stage
+            elif record.stage is not None:
+                next_stage = max(next_stage, record.stage)
+            record.status = "running"
+            record.stage = next_stage
+            record.stage_name = stage_name
+            record.progress = progress
+            record.message = message
+            record.updated_at = datetime.now(timezone.utc).isoformat()
         self._publish(self.get_job(job_id), "progress")
 
     def _set_artifacts(self, job_id: str, artifacts: ArtifactPaths) -> None:

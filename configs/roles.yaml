@@ -62,6 +62,7 @@ runtime:
   pitch_extractor: rmvpe
   pre_pitch_shift: 0.0
   preload_mode: torch_cuda
+  use_parallel_stages: true
   require_ready_models: false
   warmup_enabled: true
   warmup_audio: warmup.mp3

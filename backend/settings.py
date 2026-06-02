@@ -16,6 +16,7 @@ from src.ai_cover import (
     DEFAULT_POP2PIANO_MODEL,
     DEFAULT_SOUNDFONT,
     REPO_ROOT,
+    USE_PARALLEL_COVER_STAGES,
 )
 
 
@@ -45,6 +46,7 @@ class RuntimeConfig:
     pitch_extractor: str
     pre_pitch_shift: float
     preload_mode: str
+    use_parallel_stages: bool
     require_ready_models: bool
     pre_pitch_shift_min: int
     pre_pitch_shift_max: int
@@ -121,6 +123,10 @@ def _runtime_from_dict(data: dict[str, Any]) -> RuntimeConfig:
         pitch_extractor=os.environ.get("COVER_PITCH_EXTRACTOR", data.get("pitch_extractor", "rmvpe")),
         pre_pitch_shift=float(os.environ.get("COVER_PRE_PITCH_SHIFT", data.get("pre_pitch_shift", 0.0))),
         preload_mode=os.environ.get("COVER_PRELOAD_MODE", data.get("preload_mode", "validate")),
+        use_parallel_stages=_env_bool(
+            "COVER_PARALLEL_STAGES",
+            bool(data.get("use_parallel_stages", USE_PARALLEL_COVER_STAGES)),
+        ),
         require_ready_models=_env_bool("COVER_REQUIRE_READY_MODELS", bool(data.get("require_ready_models", False))),
         pre_pitch_shift_min=int(os.environ.get("COVER_PRE_PITCH_SHIFT_MIN", constraints.get("pre_pitch_shift", {}).get("min", -12))),
         pre_pitch_shift_max=int(os.environ.get("COVER_PRE_PITCH_SHIFT_MAX", constraints.get("pre_pitch_shift", {}).get("max", 12))),
