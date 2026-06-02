@@ -110,6 +110,11 @@ type Job = {
   updated_at?: string
 }
 
+type UploadedAudio = {
+  upload_id: string
+  filename?: string | null
+}
+
 const FALLBACK_CONFIG: BackendConfig = {
   roles: [
     { id: "amoris", name: "Amoris", default_pre_pitch_shift: 0, ready: false, loaded: false },
@@ -283,6 +288,8 @@ function App() {
   const [config, setConfig] = useState<BackendConfig>(FALLBACK_CONFIG)
   const [selectedRole, setSelectedRole] = useState("amoris")
   const [audioFile, setAudioFile] = useState<File | null>(null)
+  const [uploadedAudio, setUploadedAudio] = useState<UploadedAudio | null>(null)
+  const [uploadingAudio, setUploadingAudio] = useState(false)
   const [audioPreviewUrl, setAudioPreviewUrl] = useState<string | null>(null)
   const [keyShift, setKeyShift] = useState([0])
   const [vocalsVolume, setVocalsVolume] = useState([1])
@@ -296,11 +303,13 @@ function App() {
   const coverRoleName = jobRoleDetails?.name ?? job?.params.role_id ?? selectedRoleDetails?.name ?? selectedRole
   const isRunning = job?.status === "queued" || job?.status === "running"
   const isProcessing = isRunning || submitting || remixing
-  const canSubmit = Boolean(audioFile && selectedRoleDetails?.ready && !isProcessing)
+  const canSubmit = Boolean(audioFile && selectedRoleDetails?.ready && !isProcessing && !uploadingAudio)
   const canRemix = job?.status === "completed" && Boolean(job.artifacts.final) && !isProcessing
   const eventJobId = job?.job_id
   const eventJobStatus = job?.status
   const audioPreviewUrlRef = useRef<string | null>(null)
+  const audioUploadAbortRef = useRef<AbortController | null>(null)
+  const audioUploadSequenceRef = useRef(0)
 
   useEffect(() => {
     if (document.getElementById("dark-gothic-fonts")) return
@@ -357,6 +366,7 @@ function App() {
       if (audioPreviewUrlRef.current) {
         URL.revokeObjectURL(audioPreviewUrlRef.current)
       }
+      audioUploadAbortRef.current?.abort()
     }
   }, [])
 
@@ -393,8 +403,9 @@ function App() {
 
     try {
       setSubmitting(true)
+      const upload = uploadedAudio ?? (await uploadAudioFile(audioFile))
       const formData = new FormData()
-      formData.append("audio", audioFile)
+      formData.append("upload_id", upload.upload_id)
       formData.append("role_id", selectedRole)
       formData.append("pre_pitch_shift", String(keyShift[0]))
       formData.append("vocals_volume", String(vocalsVolume[0]))
@@ -411,11 +422,9 @@ function App() {
 
       const nextJob = (await response.json()) as Job
       setJob(nextJob)
+      setUploadedAudio(null)
     } catch {
-      toaster.create({
-        title: "提交失败",
-        type: "error",
-      })
+      toaster.create({ title: "提交失败", type: "error" })
     } finally {
       setSubmitting(false)
     }
@@ -427,8 +436,66 @@ function App() {
     setPianoVolume([config.constraints.piano_volume.default])
   }
 
+  async function uploadAudioFile(file: File, signal?: AbortSignal) {
+    const formData = new FormData()
+    formData.append("audio", file)
+
+    const response = await fetch(apiUrl("/api/uploads"), {
+      method: "POST",
+      body: formData,
+      signal,
+    })
+    if (!response.ok) {
+      throw new Error(await readError(response))
+    }
+    return (await response.json()) as UploadedAudio
+  }
+
+  function discardUploadedAudio(upload: UploadedAudio | null) {
+    if (!upload) return
+    fetch(apiUrl(`/api/uploads/${upload.upload_id}`), { method: "DELETE" }).catch(() => undefined)
+  }
+
+  function beginAudioUpload(file: File) {
+    const sequence = audioUploadSequenceRef.current + 1
+    audioUploadSequenceRef.current = sequence
+    audioUploadAbortRef.current?.abort()
+
+    const controller = new AbortController()
+    audioUploadAbortRef.current = controller
+    setUploadedAudio(null)
+    setUploadingAudio(true)
+
+    uploadAudioFile(file, controller.signal)
+      .then((upload) => {
+        if (audioUploadSequenceRef.current !== sequence) {
+          discardUploadedAudio(upload)
+          return
+        }
+        setUploadedAudio(upload)
+      })
+      .catch((error) => {
+        if (controller.signal.aborted || audioUploadSequenceRef.current !== sequence) return
+        toaster.create({
+          title: "上传失败",
+          description: error instanceof Error ? error.message : undefined,
+          type: "error",
+        })
+      })
+      .finally(() => {
+        if (audioUploadSequenceRef.current === sequence) {
+          setUploadingAudio(false)
+        }
+      })
+  }
+
   function handleAudioFileChange(file: File | null) {
     if (isProcessing) return
+    audioUploadAbortRef.current?.abort()
+    discardUploadedAudio(uploadedAudio)
+    audioUploadSequenceRef.current += 1
+    setUploadedAudio(null)
+    setUploadingAudio(false)
 
     if (audioPreviewUrlRef.current) {
       URL.revokeObjectURL(audioPreviewUrlRef.current)
@@ -448,6 +515,7 @@ function App() {
     const nextPreviewUrl = URL.createObjectURL(file)
     audioPreviewUrlRef.current = nextPreviewUrl
     setAudioPreviewUrl(nextPreviewUrl)
+    beginAudioUpload(file)
   }
 
   async function handleRemix() {
@@ -531,6 +599,8 @@ function App() {
                 />
                 <AudioPanelGroup
                   audioFile={audioFile}
+                  uploading={uploadingAudio}
+                  uploaded={Boolean(uploadedAudio)}
                   previewUrl={audioPreviewUrl}
                   onFileChange={handleAudioFileChange}
                   disabled={isProcessing}
@@ -785,6 +855,8 @@ function WorkflowCard({ job, stages, accentPalette, isDarkMode }: WorkflowCardPr
 
 type AudioPanelGroupProps = {
   audioFile: File | null
+  uploading: boolean
+  uploaded: boolean
   previewUrl: string | null
   onFileChange: (file: File | null) => void
   disabled: boolean
@@ -797,6 +869,8 @@ type AudioPanelGroupProps = {
 
 function AudioPanelGroup({
   audioFile,
+  uploading,
+  uploaded,
   previewUrl,
   onFileChange,
   disabled,
@@ -816,6 +890,8 @@ function AudioPanelGroup({
     >
       <UploadCard
         audioFile={audioFile}
+        uploading={uploading}
+        uploaded={uploaded}
         previewUrl={previewUrl}
         onFileChange={onFileChange}
         disabled={disabled}
@@ -838,6 +914,8 @@ function AudioPanelGroup({
 
 type UploadCardProps = {
   audioFile: File | null
+  uploading: boolean
+  uploaded: boolean
   previewUrl: string | null
   onFileChange: (file: File | null) => void
   disabled: boolean
@@ -846,7 +924,17 @@ type UploadCardProps = {
   stretch?: boolean
 }
 
-function UploadCard({ audioFile, previewUrl, onFileChange, disabled, accentPalette, isDarkMode, stretch = false }: UploadCardProps) {
+function UploadCard({
+  audioFile,
+  uploading,
+  uploaded,
+  previewUrl,
+  onFileChange,
+  disabled,
+  accentPalette,
+  isDarkMode,
+  stretch = false,
+}: UploadCardProps) {
   const { panelRef, initialHeight } = useInitialPanelHeight()
   const panelHeight = stretch ? "100%" : initialHeight ?? undefined
   const panelMinHeight = stretch ? "0" : initialHeight ?? undefined
@@ -868,19 +956,29 @@ function UploadCard({ audioFile, previewUrl, onFileChange, disabled, accentPalet
         <HStack justify="space-between" gap="3">
           <Card.Title>上传原唱</Card.Title>
           {audioFile && (
-            <Button
-              aria-label="取消上传"
-              size="xs"
-              variant="ghost"
-              colorPalette={accentPalette}
-              color={controlAccentColor(accentPalette)}
-              _hover={{ bg: controlSoftBg(accentPalette) }}
-              disabled={disabled}
-              flexShrink="0"
-              onClick={() => onFileChange(null)}
-            >
-              <LuX />
-            </Button>
+            <HStack gap="2" flexShrink="0">
+              <Badge
+                colorPalette={uploaded ? "green" : accentPalette}
+                variant="surface"
+                bg={!uploaded ? controlSoftBg(accentPalette) : undefined}
+                color={!uploaded ? controlAccentColor(accentPalette) : undefined}
+              >
+                {uploading ? "Uploading" : uploaded ? "Uploaded" : "Ready"}
+              </Badge>
+              <Button
+                aria-label="取消上传"
+                size="xs"
+                variant="ghost"
+                colorPalette={accentPalette}
+                color={controlAccentColor(accentPalette)}
+                _hover={{ bg: controlSoftBg(accentPalette) }}
+                disabled={disabled}
+                flexShrink="0"
+                onClick={() => onFileChange(null)}
+              >
+                <LuX />
+              </Button>
+            </HStack>
           )}
         </HStack>
       </Card.Header>

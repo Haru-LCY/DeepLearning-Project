@@ -9,6 +9,7 @@ import math
 from pathlib import Path
 import shutil
 from typing import AsyncIterator
+from uuid import UUID
 
 from fastapi import FastAPI, File, Form, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
@@ -152,9 +153,33 @@ async def models_status() -> dict:
     return app.state.registry.public_status()
 
 
+@app.post("/api/uploads")
+async def upload_audio(audio: UploadFile = File(...)) -> dict:
+    registry: ModelRegistry = app.state.registry
+    manager: JobManager = app.state.jobs
+    upload_id = manager.create_job_id()
+    upload_dir = _pending_upload_dir(registry, upload_id)
+    input_path = await _save_uploaded_audio(audio, upload_dir)
+    return {
+        "upload_id": upload_id,
+        "filename": audio.filename,
+        "path": str(input_path.relative_to(registry.runtime.upload_root)),
+    }
+
+
+@app.delete("/api/uploads/{upload_id}")
+async def delete_upload(upload_id: str) -> dict[str, str]:
+    registry: ModelRegistry = app.state.registry
+    upload_dir = _pending_upload_dir(registry, upload_id)
+    if upload_dir.exists():
+        shutil.rmtree(upload_dir)
+    return {"status": "deleted"}
+
+
 @app.post("/api/jobs")
 async def create_job(
-    audio: UploadFile = File(...),
+    audio: UploadFile | None = File(None),
+    upload_id: str | None = Form(None),
     role_id: str = Form(...),
     pre_pitch_shift: int = Form(0),
     vocals_volume: float = Form(1.0),
@@ -164,23 +189,25 @@ async def create_job(
     manager: JobManager = app.state.jobs
     _validate_job_params(registry, role_id, pre_pitch_shift, vocals_volume, piano_volume)
 
-    suffix = _validated_audio_suffix(audio.filename)
     job_id = manager.create_job_id()
     upload_dir = registry.runtime.upload_root / job_id
-    upload_dir.mkdir(parents=True, exist_ok=True)
-    input_path = upload_dir / f"input{suffix}"
-    try:
-        with input_path.open("wb") as handle:
-            shutil.copyfileobj(audio.file, handle)
-    finally:
-        await audio.close()
+    if upload_id:
+        if audio is not None:
+            await audio.close()
+            raise HTTPException(status_code=400, detail="Pass either upload_id or audio, not both.")
+        input_path, original_filename = _claim_uploaded_audio(registry, upload_id, upload_dir)
+    else:
+        if audio is None:
+            raise HTTPException(status_code=400, detail="audio or upload_id is required.")
+        input_path = await _save_uploaded_audio(audio, upload_dir)
+        original_filename = audio.filename
 
     params = JobParams(
         role_id=role_id,
         pre_pitch_shift=pre_pitch_shift,
         vocals_volume=vocals_volume,
         piano_volume=piano_volume,
-        original_filename=audio.filename,
+        original_filename=original_filename,
     )
     record = manager.enqueue(job_id=job_id, input_path=input_path, params=params)
     return manager.public_job(record.id)
@@ -305,6 +332,56 @@ def _validated_audio_suffix(filename: str | None) -> str:
             detail=f"Unsupported audio format. Allowed suffixes: {', '.join(sorted(ALLOWED_AUDIO_SUFFIXES))}",
         )
     return suffix
+
+
+def _pending_upload_dir(registry: ModelRegistry, upload_id: str) -> Path:
+    try:
+        UUID(upload_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail="Invalid upload_id") from exc
+    return registry.runtime.upload_root / "_pending" / upload_id
+
+
+async def _save_uploaded_audio(audio: UploadFile, upload_dir: Path) -> Path:
+    suffix = _validated_audio_suffix(audio.filename)
+    upload_dir.mkdir(parents=True, exist_ok=True)
+    input_path = upload_dir / f"input{suffix}"
+    metadata_path = upload_dir / "metadata.json"
+    try:
+        with input_path.open("wb") as handle:
+            shutil.copyfileobj(audio.file, handle)
+        metadata_path.write_text(
+            json.dumps({"filename": audio.filename}, ensure_ascii=False),
+            encoding="utf-8",
+        )
+    finally:
+        await audio.close()
+    return input_path
+
+
+def _claim_uploaded_audio(registry: ModelRegistry, upload_id: str, job_upload_dir: Path) -> tuple[Path, str | None]:
+    pending_dir = _pending_upload_dir(registry, upload_id)
+    if not pending_dir.exists():
+        raise HTTPException(status_code=404, detail="Uploaded audio was not found.")
+
+    input_candidates = sorted(pending_dir.glob("input.*"))
+    if len(input_candidates) != 1:
+        raise HTTPException(status_code=400, detail="Uploaded audio is invalid.")
+
+    original_filename = None
+    metadata_path = pending_dir / "metadata.json"
+    if metadata_path.exists():
+        try:
+            metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
+            original_filename = metadata.get("filename")
+        except json.JSONDecodeError:
+            original_filename = None
+
+    if job_upload_dir.exists():
+        shutil.rmtree(job_upload_dir)
+    job_upload_dir.parent.mkdir(parents=True, exist_ok=True)
+    shutil.move(str(pending_dir), str(job_upload_dir))
+    return job_upload_dir / input_candidates[0].name, original_filename
 
 
 def _sse_event(event_name: str, data: dict) -> str:
