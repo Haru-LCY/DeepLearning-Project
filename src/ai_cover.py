@@ -260,12 +260,13 @@ def build_preprocess_command(input_audio: Path, output_wav: Path, pre_pitch_shif
         pitch_ratio = 2 ** (pre_pitch_shift / 12)
         argv.extend(["-filter:a", f"rubberband=pitch={pitch_ratio:.12g}"])
     argv.extend([
-        "-ar",
-        "44100",
-        "-ac",
-        "2",
+        # "-ar",
+        # "44100",
+        # "-ac",
+        # "2",
         "-c:a",
-        "pcm_s16le",
+        # "pcm_s16le",
+        "pcm_f32le",
         str(output_wav),
     ])
 
@@ -652,6 +653,7 @@ def run_ai_piano_cover(
     vocals_volume: float = 1.0,
     piano_volume: float = 1.0,
     ddsp_model_ckpt: Path = DEFAULT_DDSP_MODEL,
+    ddsp_segment_batch_size: int = 4,
     pop2piano_model: str = DEFAULT_POP2PIANO_MODEL,
     pop2piano_composer: str = "composer1",
     pop2piano_device: str = "cpu",
@@ -774,6 +776,7 @@ def run_ai_piano_cover(
                         key=key,
                         pitch_extractor=pitch_extractor,
                         cache_dir=runtime_cache_dir,
+                        segment_batch_size=ddsp_segment_batch_size,
                     )
             else:
                 _run(

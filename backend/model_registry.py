@@ -24,6 +24,7 @@ class RoleStatus:
     checkpoint: Path
     spk_id: int
     default_pre_pitch_shift: int
+    ddsp_segment_batch_size: int
     avatar: str | None
     ready: bool
     loaded: bool
@@ -197,6 +198,7 @@ class ModelRegistry:
             checkpoint=role.ddsp_model_ckpt,
             spk_id=role.spk_id,
             default_pre_pitch_shift=role.default_pre_pitch_shift,
+            ddsp_segment_batch_size=role.ddsp_segment_batch_size,
             avatar=role.avatar,
             ready=ready,
             loaded=loaded,
@@ -329,6 +331,7 @@ class ModelRegistry:
             "name": status.name,
             "avatar": status.avatar,
             "default_pre_pitch_shift": status.default_pre_pitch_shift,
+            "ddsp_segment_batch_size": status.ddsp_segment_batch_size,
             "ready": status.ready,
             "loaded": status.loaded,
             "preload_seconds": status.preload_seconds,

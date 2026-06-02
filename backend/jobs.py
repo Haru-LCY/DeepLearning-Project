@@ -241,6 +241,7 @@ class JobManager:
                 vocals_volume=record.params.vocals_volume,
                 piano_volume=record.params.piano_volume,
                 ddsp_model_ckpt=role.ddsp_model_ckpt,
+                ddsp_segment_batch_size=role.ddsp_segment_batch_size,
                 pop2piano_model=self.runtime.pop2piano_model,
                 pop2piano_composer=self.runtime.pop2piano_composer,
                 pop2piano_device=self.runtime.pop2piano_device,

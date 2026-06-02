@@ -34,6 +34,63 @@ class DDSPRuntime:
     f0_extractor: Any | None
 
 
+@dataclass
+class _EncodedSegment:
+    index: int
+    start_frame: int
+    frames: int
+    units: Any
+    f0: Any
+    volume: Any
+
+
+@dataclass
+class _SegmentMeta:
+    index: int
+    start_frame: int
+    frames: int
+
+
+@dataclass
+class _RenderedBatch:
+    segments: list[_SegmentMeta]
+    output: Any
+
+
+def _segment_batch_size(configured_value: int | None = None, default: int = 4) -> int:
+    if configured_value is not None:
+        if configured_value < 1:
+            print(f"Configured DDSP segment batch size must be >= 1; using {default}")
+            configured_value = default
+        default = configured_value
+
+    raw_value = os.environ.get("DDSP_SEGMENT_BATCH_SIZE")
+    if raw_value is None:
+        return default
+
+    try:
+        value = int(raw_value)
+    except ValueError:
+        print(f"Invalid DDSP_SEGMENT_BATCH_SIZE={raw_value!r}; using {default}")
+        return default
+
+    if value < 1:
+        print(f"DDSP_SEGMENT_BATCH_SIZE must be >= 1; using {default}")
+        return default
+    return value
+
+
+def _length_sorted_batches(segments: list[_EncodedSegment], batch_size: int) -> Iterator[list[_EncodedSegment]]:
+    if batch_size <= 1:
+        for segment in segments:
+            yield [segment]
+        return
+
+    sorted_segments = sorted(segments, key=lambda segment: segment.frames)
+    for start in range(0, len(sorted_segments), batch_size):
+        yield sorted_segments[start : start + batch_size]
+
+
 def _move_torch_object(obj: Any, device: str) -> Any:
     if obj is None:
         return None
@@ -211,6 +268,7 @@ def run_ddsp_inprocess(
     method: str = "auto",
     t_start: str = "auto",
     spk_mix_dict: str = "None",
+    segment_batch_size: int | None = None,
 ) -> dict[str, Any]:
     """Run DDSP-SVC inference with a preloaded runtime."""
     _configure_imports()
@@ -326,8 +384,6 @@ def run_ddsp_inprocess(
         elif resolved_infer_step < 0:
             raise ValueError("infer_step cannot be negative")
 
-        result = np.zeros(0)
-        current_length = 0
         start = time.perf_counter()
         segments = split(audio, sample_rate, hop_size)
         timings["split_audio"] = round(time.perf_counter() - start, 3)
@@ -339,11 +395,106 @@ def run_ddsp_inprocess(
         cum_units_encode = 0.0
         cum_model_forward = 0.0
         cum_vocoder_infer = 0.0
-        cum_seg_loop = 0.0
+        cum_cpu_transfer = 0.0
+        cum_assemble = 0.0
+        requested_segment_batch_size = _segment_batch_size(segment_batch_size)
+        if bool(getattr(args.model, "use_attention", False)) and requested_segment_batch_size > 1:
+            print("DDSP segment batching disabled because model.use_attention has no padding mask")
+            requested_segment_batch_size = 1
+        segment_batch_size = min(requested_segment_batch_size, max(n_segments, 1))
+        timings["segment_batch_size"] = segment_batch_size
+        block_size = int(args.data.block_size)
 
+        def pad_time_batch(tensors: list[Any], target_frames: int) -> Any:
+            padded_tensors = []
+            for tensor in tensors:
+                pad_frames = target_frames - tensor.size(1)
+                if pad_frames > 0:
+                    tensor = torch.nn.functional.pad(tensor, (0, 0, 0, pad_frames))
+                padded_tensors.append(tensor)
+            return torch.cat(padded_tensors, dim=0)
+
+        def batch_mask_for_output(
+            batch_segments: list[_EncodedSegment],
+            output_samples: int,
+            output_dims: int,
+        ) -> Any:
+            mask_slices = []
+            for encoded_segment in batch_segments:
+                mask_slice = mask[
+                    :,
+                    encoded_segment.start_frame
+                    * block_size : (encoded_segment.start_frame + encoded_segment.frames)
+                    * block_size,
+                ]
+                if mask_slice.size(-1) < output_samples:
+                    mask_slice = torch.nn.functional.pad(mask_slice, (0, output_samples - mask_slice.size(-1)))
+                elif mask_slice.size(-1) > output_samples:
+                    mask_slice = mask_slice[:, :output_samples]
+                mask_slices.append(mask_slice)
+            batch_mask = torch.cat(mask_slices, dim=0)
+            while batch_mask.dim() < output_dims:
+                batch_mask = batch_mask.unsqueeze(1)
+            return batch_mask
+
+        def render_segment_batch(batch_segments: list[_EncodedSegment]) -> None:
+            nonlocal cum_model_forward, cum_vocoder_infer
+            max_frames = max(encoded_segment.frames for encoded_segment in batch_segments)
+            batch_units = pad_time_batch([encoded_segment.units for encoded_segment in batch_segments], max_frames)
+            batch_f0 = pad_time_batch([encoded_segment.f0 for encoded_segment in batch_segments], max_frames)
+            batch_volume = pad_time_batch(
+                [encoded_segment.volume for encoded_segment in batch_segments],
+                max_frames,
+            )
+            batch_speaker_id = speaker_id.expand(len(batch_segments), speaker_id.size(1))
+            # Vendor Unit2Control adds aug_shift to [B, T, C], so keep a singleton time axis.
+            batch_formant_shift = formant_shift.expand(len(batch_segments), formant_shift.size(1)).unsqueeze(1)
+
+            model_start = time.perf_counter()
+            batch_mel = runtime.model(
+                batch_units,
+                batch_f0 / vocal_register_factor,
+                batch_volume,
+                spk_id=batch_speaker_id,
+                spk_mix_dict=parsed_spk_mix_dict,
+                aug_shift=batch_formant_shift,
+                vocoder=runtime.vocoder,
+                infer_step=resolved_infer_step,
+                method=resolved_method,
+                t_start=resolved_t_start,
+                use_tqdm=False,
+            )
+            cum_model_forward += time.perf_counter() - model_start
+
+            vocoder_start = time.perf_counter()
+            batch_output_tensor = runtime.vocoder.infer(batch_mel, batch_f0)
+            cum_vocoder_infer += time.perf_counter() - vocoder_start
+
+            batch_output_tensor *= batch_mask_for_output(
+                batch_segments,
+                batch_output_tensor.size(-1),
+                batch_output_tensor.dim(),
+            )
+            rendered_batches.append(
+                _RenderedBatch(
+                    segments=[
+                        _SegmentMeta(
+                            index=encoded_segment.index,
+                            start_frame=encoded_segment.start_frame,
+                            frames=encoded_segment.frames,
+                        )
+                        for encoded_segment in batch_segments
+                    ],
+                    output=batch_output_tensor.detach(),
+                )
+            )
+            del batch_units, batch_f0, batch_volume, batch_mel, batch_output_tensor
+
+        seg_loop_start = time.perf_counter()
+        encoded_segments: list[_EncodedSegment] = []
+        rendered_batches: list[_RenderedBatch] = []
         with torch.inference_mode():
-            for segment in tqdm(segments):
-                segment_start = time.perf_counter()
+            for index, segment in enumerate(tqdm(segments, desc="encode segments")):
                 start_frame = segment[0]
                 seg_input = torch.from_numpy(segment[1]).float().unsqueeze(0).to(device)
 
@@ -354,54 +505,111 @@ def run_ddsp_inprocess(
                 seg_frames = seg_units.size(1)
                 seg_f0 = f0[:, start_frame : start_frame + seg_frames, :]
                 seg_volume = volume[:, start_frame : start_frame + seg_frames, :]
-
-                model_start = time.perf_counter()
-                seg_mel = runtime.model(
-                    seg_units,
-                    seg_f0 / vocal_register_factor,
-                    seg_volume,
-                    spk_id=speaker_id,
-                    spk_mix_dict=parsed_spk_mix_dict,
-                    aug_shift=formant_shift,
-                    vocoder=runtime.vocoder,
-                    infer_step=resolved_infer_step,
-                    method=resolved_method,
-                    t_start=resolved_t_start,
+                encoded_segments.append(
+                    _EncodedSegment(
+                        index=index,
+                        start_frame=start_frame,
+                        frames=seg_frames,
+                        units=seg_units,
+                        f0=seg_f0,
+                        volume=seg_volume,
+                    )
                 )
-                cum_model_forward += time.perf_counter() - model_start
+                del seg_input
 
-                vocoder_start = time.perf_counter()
-                seg_output_tensor = runtime.vocoder.infer(seg_mel, seg_f0)
-                cum_vocoder_infer += time.perf_counter() - vocoder_start
+            segment_batches = list(_length_sorted_batches(encoded_segments, segment_batch_size))
+            timings["n_segment_batches"] = len(segment_batches)
+            print(
+                "Rendering "
+                + str(n_segments)
+                + " segments in "
+                + str(len(segment_batches))
+                + " DDSP batches"
+            )
 
-                seg_output_tensor *= mask[
-                    :,
-                    start_frame * args.data.block_size : (start_frame + seg_frames) * args.data.block_size,
-                ]
-                seg_output = seg_output_tensor.squeeze().cpu().numpy()
-                del seg_input, seg_units, seg_f0, seg_volume, seg_mel, seg_output_tensor
+            batch_segments: list[_EncodedSegment] = []
+            for batch_segments in tqdm(segment_batches, desc="render segment batches"):
+                try:
+                    render_segment_batch(batch_segments)
+                except RuntimeError as exc:
+                    if len(batch_segments) == 1:
+                        raise
+                    print(
+                        "DDSP segment batch render failed for "
+                        + str(len(batch_segments))
+                        + " segments; retrying individually: "
+                        + str(exc)
+                    )
+                    if torch.cuda.is_available():
+                        torch.cuda.empty_cache()
+                    for single_segment in batch_segments:
+                        render_segment_batch([single_segment])
 
-                silent_length = round(start_frame * args.data.block_size) - current_length
-                if silent_length >= 0:
-                    result = np.append(result, np.zeros(silent_length))
-                    result = np.append(result, seg_output)
+        del encoded_segments, segment_batches, batch_segments
+
+        segment_outputs: list[np.ndarray | None] = [None] * n_segments
+        transfer_start = time.perf_counter()
+        for rendered_batch in rendered_batches:
+            batch_output = rendered_batch.output.cpu().numpy()
+            for batch_index, segment_meta in enumerate(rendered_batch.segments):
+                true_samples = segment_meta.frames * block_size
+                segment_output = np.asarray(batch_output[batch_index]).squeeze().reshape(-1)
+                segment_outputs[segment_meta.index] = segment_output[:true_samples].astype(np.float32, copy=True)
+        cum_cpu_transfer = time.perf_counter() - transfer_start
+
+        assemble_start = time.perf_counter()
+        result_array: np.ndarray | None = None
+        result_chunks: list[np.ndarray] = []
+        current_length = 0
+
+        def materialize_result() -> np.ndarray:
+            nonlocal result_array, result_chunks
+            if result_array is None:
+                if result_chunks:
+                    result_array = np.concatenate(result_chunks).astype(np.float32, copy=False)
                 else:
-                    result = cross_fade(result, seg_output, current_length + silent_length)
-                current_length = current_length + silent_length + len(seg_output)
-                cum_seg_loop += time.perf_counter() - segment_start
-                del seg_output
+                    result_array = np.zeros(0, dtype=np.float32)
+            elif result_chunks:
+                result_array = np.concatenate([result_array, *result_chunks]).astype(np.float32, copy=False)
+            result_chunks = []
+            return result_array
 
-        del f0, volume, mask, speaker_id, formant_shift, segments, audio
+        for segment_output, segment in zip(segment_outputs, segments):
+            if segment_output is None:
+                continue
+            start_frame = segment[0]
+            silent_length = round(start_frame * block_size) - current_length
+            if silent_length >= 0:
+                if silent_length > 0:
+                    result_chunks.append(np.zeros(silent_length, dtype=np.float32))
+                result_chunks.append(segment_output)
+            else:
+                result_array = cross_fade(
+                    materialize_result(),
+                    segment_output,
+                    current_length + silent_length,
+                ).astype(np.float32, copy=False)
+            current_length = current_length + silent_length + len(segment_output)
+        result = materialize_result()
+        cum_assemble = time.perf_counter() - assemble_start
+        cum_seg_loop = time.perf_counter() - seg_loop_start
+
+        del f0, volume, mask, speaker_id, formant_shift, segments, audio, rendered_batches, segment_outputs
 
         timings["seg_loop_total"] = round(cum_seg_loop, 3)
         timings["units_encode_total"] = round(cum_units_encode, 3)
         timings["model_forward_total"] = round(cum_model_forward, 3)
         timings["vocoder_infer_total"] = round(cum_vocoder_infer, 3)
+        timings["cpu_transfer_total"] = round(cum_cpu_transfer, 3)
+        timings["assemble_total"] = round(cum_assemble, 3)
         timings["overhead"] = round(cum_seg_loop - cum_units_encode - cum_model_forward - cum_vocoder_infer, 3)
         print(f'[T] seg_loop_total ({n_segments} segs): {timings["seg_loop_total"]}s')
+        print(f'[T]   DDSP segment batch size: {segment_batch_size}')
         print(f'[T]   units_encode: {timings["units_encode_total"]}s')
         print(f'[T]   model_forward (DDSP+Reflow): {timings["model_forward_total"]}s')
         print(f'[T]   vocoder_infer: {timings["vocoder_infer_total"]}s')
+        print(f'[T]   cpu_transfer: {timings["cpu_transfer_total"]}s')
+        print(f'[T]   assemble: {timings["assemble_total"]}s')
         print(f'[T]   overhead (mask/copy/fade): {timings["overhead"]}s')
 
         start = time.perf_counter()

@@ -89,6 +89,7 @@ def _run_startup_warmup(registry: ModelRegistry) -> None:
         vocals_volume=runtime.warmup_vocals_volume,
         piano_volume=runtime.warmup_piano_volume,
         ddsp_model_ckpt=role.ddsp_model_ckpt,
+        ddsp_segment_batch_size=role.ddsp_segment_batch_size,
         pop2piano_model=runtime.pop2piano_model,
         pop2piano_composer=runtime.pop2piano_composer,
         pop2piano_device=runtime.pop2piano_device,

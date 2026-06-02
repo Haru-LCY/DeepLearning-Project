@@ -27,6 +27,7 @@ class RoleConfig:
     ddsp_model_ckpt: Path
     spk_id: int = 1
     default_pre_pitch_shift: int = 0
+    ddsp_segment_batch_size: int = 4
     avatar: str | None = None
 
 
@@ -157,17 +158,22 @@ def load_backend_config(config_path: Path | None = None) -> BackendConfig:
     if not role_items:
         raise ValueError(f"Backend roles config does not define any roles: {path}")
 
-    roles = [
-        RoleConfig(
-            id=str(item["id"]),
-            name=str(item.get("name", item["id"])),
-            ddsp_model_ckpt=_resolve_path(item["ddsp_model_ckpt"]),
-            spk_id=int(item.get("spk_id", 1)),
-            default_pre_pitch_shift=int(item.get("default_pre_pitch_shift", 0)),
-            avatar=item.get("avatar"),
+    roles = []
+    for item in role_items:
+        ddsp_segment_batch_size = int(item.get("ddsp_segment_batch_size", 4))
+        if ddsp_segment_batch_size < 1:
+            raise ValueError(f"ddsp_segment_batch_size must be >= 1 for role {item['id']}")
+        roles.append(
+            RoleConfig(
+                id=str(item["id"]),
+                name=str(item.get("name", item["id"])),
+                ddsp_model_ckpt=_resolve_path(item["ddsp_model_ckpt"]),
+                spk_id=int(item.get("spk_id", 1)),
+                default_pre_pitch_shift=int(item.get("default_pre_pitch_shift", 0)),
+                ddsp_segment_batch_size=ddsp_segment_batch_size,
+                avatar=item.get("avatar"),
+            )
         )
-        for item in role_items
-    ]
     duplicate_ids = {role.id for role in roles if sum(1 for item in roles if item.id == role.id) > 1}
     if duplicate_ids:
         raise ValueError(f"Duplicate role ids in backend config: {', '.join(sorted(duplicate_ids))}")
