@@ -16,8 +16,9 @@ from fastapi.responses import FileResponse, StreamingResponse
 from pydantic import BaseModel
 
 from backend.jobs import JobManager, JobParams
-from backend.model_registry import ModelRegistry
+from backend.model_registry import MODEL_PRELOAD_MODES, ModelRegistry
 from backend.progress import ProgressBroker, queue_get_with_timeout
+from src.ai_cover import run_ai_piano_cover
 
 
 ALLOWED_AUDIO_SUFFIXES = {".mp3", ".wav", ".flac", ".m4a", ".aac", ".ogg"}
@@ -32,6 +33,7 @@ class RemixRequest(BaseModel):
 async def lifespan(app: FastAPI):
     registry = ModelRegistry()
     registry.load()
+    await asyncio.to_thread(_run_startup_warmup, registry)
     broker = ProgressBroker()
     manager = JobManager(registry=registry, broker=broker)
     manager.start()
@@ -39,6 +41,7 @@ async def lifespan(app: FastAPI):
     app.state.registry = registry
     app.state.broker = broker
     app.state.jobs = manager
+    print("startup complete")
 
     yield
 
@@ -53,6 +56,76 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+
+def _run_startup_warmup(registry: ModelRegistry) -> None:
+    runtime = registry.runtime
+    if not runtime.warmup_enabled:
+        return
+    if not runtime.warmup_audio.exists():
+        raise FileNotFoundError(f"Warmup audio was not found: {runtime.warmup_audio}")
+
+    role_id = runtime.warmup_role_id or _first_ready_role_id(registry)
+    role = registry.get_ready_role(role_id)
+    demucs_separator = _loaded_warmup_component(registry, "demucs")
+    ddsp_runtime = _loaded_warmup_role_runtime(registry, role.id)
+    pop2piano_components = _loaded_warmup_component(registry, "pop2piano")
+
+    print(
+        "Running startup warmup with "
+        f"{runtime.warmup_audio} as role {role.id} "
+        f"(pre_pitch_shift={runtime.warmup_pre_pitch_shift:+g}, "
+        f"vocals_volume={runtime.warmup_vocals_volume:g}, "
+        f"piano_volume={runtime.warmup_piano_volume:g})"
+    )
+    run_ai_piano_cover(
+        input_audio=runtime.warmup_audio,
+        output_root=runtime.warmup_output_root,
+        device=runtime.device,
+        spk_id=role.spk_id,
+        key=0,
+        pre_pitch_shift=runtime.warmup_pre_pitch_shift,
+        pitch_extractor=runtime.pitch_extractor,
+        vocals_volume=runtime.warmup_vocals_volume,
+        piano_volume=runtime.warmup_piano_volume,
+        ddsp_model_ckpt=role.ddsp_model_ckpt,
+        pop2piano_model=runtime.pop2piano_model,
+        pop2piano_composer=runtime.pop2piano_composer,
+        pop2piano_device=runtime.pop2piano_device,
+        pop2piano_max_length=runtime.pop2piano_max_length,
+        pop2piano_beat_checkpoint=runtime.pop2piano_beat_checkpoint,
+        demucs_separator=demucs_separator,
+        ddsp_runtime=ddsp_runtime,
+        pop2piano_components=pop2piano_components,
+        soundfont=runtime.soundfont,
+        fluidsynth_bin=runtime.fluidsynth_bin,
+        fluidsynth_lib_dir=runtime.fluidsynth_lib_dir,
+    )
+
+
+def _first_ready_role_id(registry: ModelRegistry) -> str:
+    for status in registry.role_status.values():
+        if status.ready:
+            return status.id
+    raise RuntimeError("No ready role is available for startup warmup.")
+
+
+def _loaded_warmup_component(registry: ModelRegistry, name: str):
+    if registry.runtime.preload_mode not in MODEL_PRELOAD_MODES:
+        return None
+    component = registry.loaded_components.get(name)
+    if component is None:
+        raise RuntimeError(f"Preloaded warmup component is not available: {name}")
+    return component
+
+
+def _loaded_warmup_role_runtime(registry: ModelRegistry, role_id: str):
+    if registry.runtime.preload_mode not in MODEL_PRELOAD_MODES:
+        return None
+    runtime = registry.loaded_checkpoints.get(role_id)
+    if runtime is None:
+        raise RuntimeError(f"Preloaded warmup DDSP runtime is not available for role: {role_id}")
+    return runtime
 
 
 @app.middleware("http")

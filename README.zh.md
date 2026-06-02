@@ -275,6 +275,8 @@ uvicorn backend.main:app --host 0.0.0.0 --port 8000
 
 后端启动时会读取 `configs/roles.yaml`，并按 exp 目录下已有的 8 个 DDSP checkpoint 做角色列表。默认 `preload_mode: torch_cuda` 会在启动时把 Demucs、8 个 DDSP 角色运行时、RMVPE pitch extractor 和 Pop2Piano 都加载到后端进程的 CUDA/显存中；后端任务会复用这些进程内模型，不再为这些模型阶段启动子进程后重新加载权重。如果只想做资源校验、不预读权重，可以设置：
 
+预加载后，后端会用仓库根目录的 `warmup.mp3` 跑一遍完整 cover 流程，输出到 `assets/output/jobs/_startup_warmup`。warmup 会使用非默认的预移调和混音音量，模拟真实请求参数。这一步成功后才会打印 `startup complete`。
+
 ```bash
 export COVER_PRELOAD_MODE=validate
 ```

@@ -78,7 +78,7 @@ def main() -> None:
 
     t_rhythm = time.perf_counter()
     from beat_this.inference import Audio2Beats
-    beat_tracker = Audio2Beats(checkpoint_path="final0", device=device)
+    beat_tracker = Audio2Beats(checkpoint_path="/root/autodl-tmp/DeepLearning-Project/pop2piano/models/final0.ckpt", device=device)
     beats, _downbeats = beat_tracker(audio, sr)
     beat_times = np.asarray(beats, dtype=np.float32)
     beat_intervals = np.diff(beat_times)

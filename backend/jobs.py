@@ -245,6 +245,7 @@ class JobManager:
                 pop2piano_composer=self.runtime.pop2piano_composer,
                 pop2piano_device=self.runtime.pop2piano_device,
                 pop2piano_max_length=self.runtime.pop2piano_max_length,
+                pop2piano_beat_checkpoint=self.runtime.pop2piano_beat_checkpoint,
                 demucs_separator=demucs_separator,
                 ddsp_runtime=ddsp_runtime,
                 pop2piano_components=pop2piano_components,

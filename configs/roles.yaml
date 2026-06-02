@@ -54,6 +54,7 @@ runtime:
   pop2piano_model: models/pop2piano/sweetcocoa-pop2piano
   pop2piano_composer: composer1
   pop2piano_device: cuda
+  pop2piano_beat_checkpoint: pop2piano/models/final0.ckpt
   pop2piano_max_length: 256
   soundfont: assets/soundfonts/extracted/usr/share/sounds/sf2/FluidR3_GM.sf2
   fluidsynth_bin: assets/soundfonts/fluidsynth_pkg/usr/bin/fluidsynth
@@ -62,6 +63,12 @@ runtime:
   pre_pitch_shift: 0.0
   preload_mode: torch_cuda
   require_ready_models: false
+  warmup_enabled: true
+  warmup_audio: warmup.mp3
+  warmup_output_root: assets/output/jobs/_startup_warmup
+  warmup_pre_pitch_shift: 1.0
+  warmup_vocals_volume: 0.9
+  warmup_piano_volume: 1.1
   cors_origins:
     - "*"
   constraints:

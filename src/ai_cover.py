@@ -29,6 +29,7 @@ DEFAULT_POP2PIANO_MODEL = (
     if DEFAULT_LOCAL_POP2PIANO_MODEL.exists()
     else "sweetcocoa/pop2piano"
 )
+DEFAULT_POP2PIANO_BEAT_CHECKPOINT = REPO_ROOT / "pop2piano" / "models" / "final0.ckpt"
 DEFAULT_SOUNDFONT = REPO_ROOT / "assets" / "soundfonts" / "extracted" / "usr" / "share" / "sounds" / "sf2" / "FluidR3_GM.sf2"
 DEFAULT_FLUIDSYNTH_BIN = REPO_ROOT / "assets" / "soundfonts" / "fluidsynth_pkg" / "usr" / "bin" / "fluidsynth"
 DEFAULT_FLUIDSYNTH_LIB_DIR = REPO_ROOT / "assets" / "soundfonts" / "runtime_libs" / "usr" / "lib" / "x86_64-linux-gnu"
@@ -344,12 +345,15 @@ def run_pop2piano_inprocess(
     composer: str,
     device: str,
     max_length: int,
+    beat_checkpoint: Path | None = None,
     preloaded_components: dict[str, Any] | None = None,
     sampling_rate: int = 44100,
 ) -> dict[str, Any]:
     """Run Pop2Piano without spawning a second Python interpreter."""
     import librosa
+    import numpy as np
     import torch
+    import types
 
     timings: dict[str, Any] = {}
     total_start = time.perf_counter()
@@ -378,6 +382,30 @@ def run_pop2piano_inprocess(
     audio, sr = librosa.load(input_audio, sr=sampling_rate, mono=True)
     timings["load_audio"] = round(time.perf_counter() - start, 3)
     print(f'[T] load_audio: {timings["load_audio"]}s')
+
+    start = time.perf_counter()
+    if preloaded_components is not None and "beat_tracker" in preloaded_components:
+        beat_tracker = preloaded_components["beat_tracker"]
+    else:
+        if beat_checkpoint is None:
+            raise ValueError("Pop2Piano Audio2Beats checkpoint is required for in-process inference.")
+        from beat_this.inference import Audio2Beats
+
+        beat_tracker = Audio2Beats(checkpoint_path=str(beat_checkpoint), device=resolved_device)
+    beats, _downbeats = beat_tracker(audio, sr)
+    beat_times = np.asarray(beats, dtype=np.float32)
+    beat_intervals = np.diff(beat_times)
+    bpm = float(60.0 / np.median(beat_intervals)) if beat_intervals.size else 120.0
+    timings["rhythm_extract"] = round(time.perf_counter() - start, 3)
+    print(f'[T] rhythm_extract (beat_this, device={resolved_device}): {timings["rhythm_extract"]}s')
+
+    def patched_extract_rhythm(self, audio):
+        return bpm, beat_times, 1.0, [], beat_intervals
+
+    processor.feature_extractor.extract_rhythm = types.MethodType(
+        patched_extract_rhythm,
+        processor.feature_extractor,
+    )
 
     start = time.perf_counter()
     inputs = processor(
@@ -508,6 +536,7 @@ def run_ai_piano_cover(
     pop2piano_composer: str = "composer1",
     pop2piano_device: str = "cpu",
     pop2piano_max_length: int = 256,
+    pop2piano_beat_checkpoint: Path | None = DEFAULT_POP2PIANO_BEAT_CHECKPOINT,
     demucs_separator: Any | None = None,
     ddsp_runtime: Any | None = None,
     pop2piano_components: dict[str, Any] | None = None,
@@ -641,6 +670,7 @@ def run_ai_piano_cover(
                 composer=pop2piano_composer,
                 device=pop2piano_device,
                 max_length=pop2piano_max_length,
+                beat_checkpoint=pop2piano_beat_checkpoint,
                 preloaded_components=pop2piano_components,
             )
     else:

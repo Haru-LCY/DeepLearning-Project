@@ -122,6 +122,7 @@ class ModelRegistry:
         components["fluidsynth_lib_dir"] = self._path_status(runtime.fluidsynth_lib_dir, expect_dir=True)
         if runtime.pitch_extractor == "rmvpe":
             components["pitch_extractor"] = self._path_status(DDSP_ROOT / "pretrain" / "rmvpe" / "model.pt", expect_dir=False)
+        components["pop2piano_beat_checkpoint"] = self._path_status(runtime.pop2piano_beat_checkpoint, expect_dir=False)
 
         pop2piano_path = Path(runtime.pop2piano_model)
         if pop2piano_path.exists():
@@ -205,7 +206,11 @@ class ModelRegistry:
 
     def _preload_runtime_weights(self, config: BackendConfig) -> None:
         self._preload_pitch_extractor(config.runtime.pitch_extractor, self._ddsp_preload_device(config))
-        self._preload_pop2piano(config.runtime.pop2piano_model, self._pop2piano_preload_device(config))
+        self._preload_pop2piano(
+            config.runtime.pop2piano_model,
+            config.runtime.pop2piano_beat_checkpoint,
+            self._pop2piano_preload_device(config),
+        )
         self._preload_demucs(self._demucs_preload_device(config))
 
     def _preload_pitch_extractor(self, pitch_extractor: str, device: str) -> None:
@@ -229,11 +234,12 @@ class ModelRegistry:
 
         return load_ddsp_runtime(role.ddsp_model_ckpt, device=device, pitch_extractor=pitch_extractor)
 
-    def _preload_pop2piano(self, model_id_or_path: str, device: str) -> None:
+    def _preload_pop2piano(self, model_id_or_path: str, beat_checkpoint: Path, device: str) -> None:
         if not self.components["pop2piano"]["ready"]:
             return
         start = time.perf_counter()
         try:
+            from beat_this.inference import Audio2Beats
             from transformers import Pop2PianoForConditionalGeneration, Pop2PianoProcessor
 
             resolved_device = self._resolve_torch_device(device)
@@ -242,15 +248,22 @@ class ModelRegistry:
             self.loaded_components["pop2piano"] = {
                 "processor": Pop2PianoProcessor.from_pretrained(model_id_or_path),
                 "model": model,
+                "beat_tracker": Audio2Beats(checkpoint_path=str(beat_checkpoint), device=resolved_device),
+                "beat_checkpoint": str(beat_checkpoint),
                 "device": resolved_device,
             }
             self.components["pop2piano"]["loaded"] = True
             self.components["pop2piano"]["device"] = resolved_device
+            self.components["pop2piano"]["beat_checkpoint"] = str(beat_checkpoint)
             self.components["pop2piano"]["preload_seconds"] = round(time.perf_counter() - start, 3)
+            self.components["pop2piano_beat_checkpoint"]["loaded"] = True
+            self.components["pop2piano_beat_checkpoint"]["device"] = resolved_device
+            self.components["pop2piano_beat_checkpoint"]["preload_seconds"] = self.components["pop2piano"]["preload_seconds"]
         except Exception as exc:  # noqa: BLE001 - surfaced through status API
             self.components["pop2piano"]["ready"] = False
             self.components["pop2piano"]["loaded"] = False
             self.components["pop2piano"]["error"] = f"Failed to preload Pop2Piano: {exc}"
+            self.components["pop2piano_beat_checkpoint"]["loaded"] = False
 
     def _preload_demucs(self, device: str) -> None:
         if not self.components["demucs"]["ready"]:

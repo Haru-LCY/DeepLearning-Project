@@ -22,6 +22,7 @@ from src.ai_cover import (
     DEFAULT_DDSP_MODEL,
     DEFAULT_FLUIDSYNTH_BIN,
     DEFAULT_FLUIDSYNTH_LIB_DIR,
+    DEFAULT_POP2PIANO_BEAT_CHECKPOINT,
     DEFAULT_POP2PIANO_MODEL,
     DEFAULT_SOUNDFONT,
     run_ai_piano_cover,
@@ -61,6 +62,12 @@ def parse_args() -> argparse.Namespace:
         help="Pop2Piano inference device. CPU is the stable default.",
     )
     parser.add_argument("--pop2piano-max-length", default=256, type=int, help="Pop2Piano max generated token length.")
+    parser.add_argument(
+        "--pop2piano-beat-checkpoint",
+        default=DEFAULT_POP2PIANO_BEAT_CHECKPOINT,
+        type=Path,
+        help="Beat-This Audio2Beats checkpoint used by in-process Pop2Piano.",
+    )
     parser.add_argument("--soundfont", default=DEFAULT_SOUNDFONT, type=Path, help="SoundFont used for piano rendering.")
     parser.add_argument(
         "--fluidsynth-bin",
@@ -95,6 +102,7 @@ def main() -> None:
         pop2piano_composer=args.pop2piano_composer,
         pop2piano_device=args.pop2piano_device,
         pop2piano_max_length=args.pop2piano_max_length,
+        pop2piano_beat_checkpoint=args.pop2piano_beat_checkpoint,
         soundfont=args.soundfont,
         fluidsynth_bin=args.fluidsynth_bin,
         fluidsynth_lib_dir=args.fluidsynth_lib_dir,

@@ -12,6 +12,7 @@ import yaml
 from src.ai_cover import (
     DEFAULT_FLUIDSYNTH_BIN,
     DEFAULT_FLUIDSYNTH_LIB_DIR,
+    DEFAULT_POP2PIANO_BEAT_CHECKPOINT,
     DEFAULT_POP2PIANO_MODEL,
     DEFAULT_SOUNDFONT,
     REPO_ROOT,
@@ -36,6 +37,7 @@ class RuntimeConfig:
     pop2piano_model: str
     pop2piano_composer: str
     pop2piano_device: str
+    pop2piano_beat_checkpoint: Path
     pop2piano_max_length: int
     soundfont: Path
     fluidsynth_bin: Path
@@ -48,6 +50,13 @@ class RuntimeConfig:
     pre_pitch_shift_max: int
     volume_min: float
     volume_max: float
+    warmup_enabled: bool
+    warmup_audio: Path
+    warmup_output_root: Path
+    warmup_role_id: str | None
+    warmup_pre_pitch_shift: float
+    warmup_vocals_volume: float
+    warmup_piano_volume: float
     cors_origins: list[str]
 
 
@@ -100,6 +109,9 @@ def _runtime_from_dict(data: dict[str, Any]) -> RuntimeConfig:
         ),
         pop2piano_composer=os.environ.get("COVER_POP2PIANO_COMPOSER", data.get("pop2piano_composer", "composer1")),
         pop2piano_device=os.environ.get("COVER_POP2PIANO_DEVICE", data.get("pop2piano_device", "cpu")),
+        pop2piano_beat_checkpoint=_resolve_path(
+            os.environ.get("COVER_POP2PIANO_BEAT_CHECKPOINT", data.get("pop2piano_beat_checkpoint", DEFAULT_POP2PIANO_BEAT_CHECKPOINT))
+        ),
         pop2piano_max_length=int(os.environ.get("COVER_POP2PIANO_MAX_LENGTH", data.get("pop2piano_max_length", 256))),
         soundfont=_resolve_path(os.environ.get("COVER_SOUNDFONT", data.get("soundfont", DEFAULT_SOUNDFONT))),
         fluidsynth_bin=_resolve_path(os.environ.get("COVER_FLUIDSYNTH_BIN", data.get("fluidsynth_bin", DEFAULT_FLUIDSYNTH_BIN))),
@@ -114,6 +126,15 @@ def _runtime_from_dict(data: dict[str, Any]) -> RuntimeConfig:
         pre_pitch_shift_max=int(os.environ.get("COVER_PRE_PITCH_SHIFT_MAX", constraints.get("pre_pitch_shift", {}).get("max", 12))),
         volume_min=float(os.environ.get("COVER_VOLUME_MIN", constraints.get("volume", {}).get("min", 0.0))),
         volume_max=float(os.environ.get("COVER_VOLUME_MAX", constraints.get("volume", {}).get("max", 2.0))),
+        warmup_enabled=_env_bool("COVER_WARMUP_ENABLED", bool(data.get("warmup_enabled", True))),
+        warmup_audio=_resolve_path(os.environ.get("COVER_WARMUP_AUDIO", data.get("warmup_audio", "warmup.mp3"))),
+        warmup_output_root=_resolve_path(
+            os.environ.get("COVER_WARMUP_OUTPUT_ROOT", data.get("warmup_output_root", "assets/output/jobs/_startup_warmup"))
+        ),
+        warmup_role_id=os.environ.get("COVER_WARMUP_ROLE_ID", data.get("warmup_role_id")),
+        warmup_pre_pitch_shift=float(os.environ.get("COVER_WARMUP_PRE_PITCH_SHIFT", data.get("warmup_pre_pitch_shift", 1.0))),
+        warmup_vocals_volume=float(os.environ.get("COVER_WARMUP_VOCALS_VOLUME", data.get("warmup_vocals_volume", 0.9))),
+        warmup_piano_volume=float(os.environ.get("COVER_WARMUP_PIANO_VOLUME", data.get("warmup_piano_volume", 1.1))),
         cors_origins=_env_list("COVER_CORS_ORIGINS", data.get("cors_origins", ["*"])),
     )
 
