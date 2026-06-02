@@ -53,14 +53,14 @@ runtime:
   device: cuda
   pop2piano_model: models/pop2piano/sweetcocoa-pop2piano
   pop2piano_composer: composer1
-  pop2piano_device: cpu
+  pop2piano_device: cuda
   pop2piano_max_length: 256
   soundfont: assets/soundfonts/extracted/usr/share/sounds/sf2/FluidR3_GM.sf2
   fluidsynth_bin: assets/soundfonts/fluidsynth_pkg/usr/bin/fluidsynth
   fluidsynth_lib_dir: assets/soundfonts/runtime_libs/usr/lib/x86_64-linux-gnu
   pitch_extractor: rmvpe
   pre_pitch_shift: 0.0
-  preload_mode: torch_cpu
+  preload_mode: torch_cuda
   require_ready_models: false
   cors_origins:
     - "*"

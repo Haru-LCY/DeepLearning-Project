@@ -17,6 +17,7 @@ uvicorn backend.main:app --host 0.0.0.0 --port 8000
 ```
 
 Backend role/API config lives in `configs/roles.yaml`.
+The default backend preload mode is `torch_cuda`: startup loads Demucs, all configured DDSP role runtimes, RMVPE, and Pop2Piano into the backend process on CUDA, and backend jobs reuse those in-process models instead of loading them in model subprocesses.
 
 ## Quick Setup
 

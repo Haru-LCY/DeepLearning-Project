@@ -6,10 +6,12 @@ import argparse
 import json
 import os
 import time
+import types
 from pathlib import Path
 import tempfile
 
 import librosa
+import numpy as np
 import torch
 from transformers import Pop2PianoForConditionalGeneration, Pop2PianoProcessor
 
@@ -73,7 +75,23 @@ def main() -> None:
     audio, sr = librosa.load(args.input, sr=args.sampling_rate, mono=True)
     pop2piano_timings['load_audio'] = round(time.perf_counter() - t0, 3)
     print(f'[T] load_audio: {pop2piano_timings["load_audio"]}s')
-    
+
+    t_rhythm = time.perf_counter()
+    from beat_this.inference import Audio2Beats
+    beat_tracker = Audio2Beats(checkpoint_path="final0", device=device)
+    beats, _downbeats = beat_tracker(audio, sr)
+    beat_times = np.asarray(beats, dtype=np.float32)
+    beat_intervals = np.diff(beat_times)
+    bpm = float(60.0 / np.median(beat_intervals)) if beat_intervals.size else 120.0
+    pop2piano_timings['rhythm_extract'] = round(time.perf_counter() - t_rhythm, 3)
+    print(f'[T] rhythm_extract (beat_this, device={device}): {pop2piano_timings["rhythm_extract"]}s')
+
+    def patched_extract_rhythm(self, audio):
+        return bpm, beat_times, 1.0, [], beat_intervals
+    processor.feature_extractor.extract_rhythm = types.MethodType(
+        patched_extract_rhythm, processor.feature_extractor
+    )
+
     t0 = time.perf_counter()
     inputs = processor(
         audio=audio,

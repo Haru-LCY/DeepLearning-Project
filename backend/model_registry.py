@@ -9,11 +9,12 @@ import sys
 import time
 from typing import Any
 
-import yaml
-
 from src.ai_cover import DDSP_ROOT, DEMUCS_ROOT, resolve_ddsp_assets
 
 from backend.settings import BackendConfig, RoleConfig, load_backend_config
+
+
+MODEL_PRELOAD_MODES = {"torch_cpu", "torch_cuda", "torch_device"}
 
 
 @dataclass(frozen=True)
@@ -52,9 +53,9 @@ class ModelRegistry:
         self.loaded_components = {}
 
         for role in config.roles:
-            self.role_status[role.id] = self._load_role(role, config.runtime.preload_mode)
+            self.role_status[role.id] = self._load_role(role, config)
 
-        if config.runtime.preload_mode == "torch_cpu":
+        if config.runtime.preload_mode in MODEL_PRELOAD_MODES:
             self._preload_runtime_weights(config)
 
         self.loaded_at = datetime.now(timezone.utc).isoformat()
@@ -129,12 +130,15 @@ class ModelRegistry:
             components["pop2piano"] = {
                 "ready": True,
                 "path": runtime.pop2piano_model,
+                "loaded": False,
+                "preload_seconds": None,
                 "error": None,
                 "note": "Model id will be resolved by transformers at runtime.",
             }
         return components
 
-    def _load_role(self, role: RoleConfig, preload_mode: str) -> RoleStatus:
+    def _load_role(self, role: RoleConfig, config: BackendConfig) -> RoleStatus:
+        preload_mode = config.runtime.preload_mode
         loaded = False
         preload_seconds = None
         error = None
@@ -156,12 +160,30 @@ class ModelRegistry:
         if ready and preload_mode == "torch_cpu":
             try:
                 start = time.perf_counter()
-                self.loaded_checkpoints[role.id] = self._preload_ddsp_role(role)
+                self.loaded_checkpoints[role.id] = self._preload_ddsp_role(
+                    role,
+                    device="cpu",
+                    pitch_extractor=config.runtime.pitch_extractor,
+                )
                 preload_seconds = round(time.perf_counter() - start, 3)
                 loaded = True
             except Exception as exc:  # noqa: BLE001 - surfaced through readiness status
                 ready = False
-                error = f"Failed to torch-load checkpoint: {exc}"
+                error = f"Failed to preload DDSP runtime on cpu: {exc}"
+        elif ready and preload_mode in {"torch_cuda", "torch_device"}:
+            device = self._ddsp_preload_device(config)
+            try:
+                start = time.perf_counter()
+                self.loaded_checkpoints[role.id] = self._preload_ddsp_role(
+                    role,
+                    device=device,
+                    pitch_extractor=config.runtime.pitch_extractor,
+                )
+                preload_seconds = round(time.perf_counter() - start, 3)
+                loaded = True
+            except Exception as exc:  # noqa: BLE001 - surfaced through readiness status
+                ready = False
+                error = f"Failed to preload DDSP runtime on {device}: {exc}"
         elif ready and preload_mode in {"validate", "none"}:
             loaded = False
         elif ready:
@@ -182,61 +204,55 @@ class ModelRegistry:
         )
 
     def _preload_runtime_weights(self, config: BackendConfig) -> None:
-        self._preload_pitch_extractor(config.runtime.pitch_extractor)
-        self._preload_pop2piano(config.runtime.pop2piano_model)
-        self._preload_demucs()
+        self._preload_pitch_extractor(config.runtime.pitch_extractor, self._ddsp_preload_device(config))
+        self._preload_pop2piano(config.runtime.pop2piano_model, self._pop2piano_preload_device(config))
+        self._preload_demucs(self._demucs_preload_device(config))
 
-    def _preload_pitch_extractor(self, pitch_extractor: str) -> None:
+    def _preload_pitch_extractor(self, pitch_extractor: str, device: str) -> None:
         if pitch_extractor != "rmvpe" or "pitch_extractor" not in self.components or not self.components["pitch_extractor"]["ready"]:
             return
         start = time.perf_counter()
         try:
-            import torch
+            from src.ddsp_inprocess import preload_ddsp_pitch_extractor
 
-            model_path = DDSP_ROOT / "pretrain" / "rmvpe" / "model.pt"
-            self.loaded_components["pitch_extractor"] = torch.load(model_path, map_location="cpu")
+            self.loaded_components["pitch_extractor"] = preload_ddsp_pitch_extractor(pitch_extractor, device)
             self.components["pitch_extractor"]["loaded"] = True
+            self.components["pitch_extractor"]["device"] = device
             self.components["pitch_extractor"]["preload_seconds"] = round(time.perf_counter() - start, 3)
         except Exception as exc:  # noqa: BLE001 - surfaced through status API
             self.components["pitch_extractor"]["ready"] = False
             self.components["pitch_extractor"]["loaded"] = False
             self.components["pitch_extractor"]["error"] = f"Failed to preload pitch extractor: {exc}"
 
-    def _preload_ddsp_role(self, role: RoleConfig) -> dict[str, Any]:
-        import torch
+    def _preload_ddsp_role(self, role: RoleConfig, device: str, pitch_extractor: str) -> Any:
+        from src.ddsp_inprocess import load_ddsp_runtime
 
-        config_path = role.ddsp_model_ckpt.with_name("config.yaml")
-        with config_path.open("r", encoding="utf-8") as handle:
-            config = yaml.safe_load(handle)
+        return load_ddsp_runtime(role.ddsp_model_ckpt, device=device, pitch_extractor=pitch_extractor)
 
-        encoder_ckpt = (DDSP_ROOT / config["data"]["encoder_ckpt"]).resolve()
-        vocoder_ckpt = (DDSP_ROOT / config["vocoder"]["ckpt"]).resolve()
-        bundle = {
-            "model_ckpt": torch.load(role.ddsp_model_ckpt, map_location="cpu"),
-            "encoder_ckpt": torch.load(encoder_ckpt, map_location="cpu"),
-            "vocoder_ckpt": torch.load(vocoder_ckpt, map_location="cpu"),
-        }
-        return bundle
-
-    def _preload_pop2piano(self, model_id_or_path: str) -> None:
+    def _preload_pop2piano(self, model_id_or_path: str, device: str) -> None:
         if not self.components["pop2piano"]["ready"]:
             return
         start = time.perf_counter()
         try:
             from transformers import Pop2PianoForConditionalGeneration, Pop2PianoProcessor
 
+            resolved_device = self._resolve_torch_device(device)
+            model = Pop2PianoForConditionalGeneration.from_pretrained(model_id_or_path).to(resolved_device)
+            model.eval()
             self.loaded_components["pop2piano"] = {
                 "processor": Pop2PianoProcessor.from_pretrained(model_id_or_path),
-                "model": Pop2PianoForConditionalGeneration.from_pretrained(model_id_or_path),
+                "model": model,
+                "device": resolved_device,
             }
             self.components["pop2piano"]["loaded"] = True
+            self.components["pop2piano"]["device"] = resolved_device
             self.components["pop2piano"]["preload_seconds"] = round(time.perf_counter() - start, 3)
         except Exception as exc:  # noqa: BLE001 - surfaced through status API
             self.components["pop2piano"]["ready"] = False
             self.components["pop2piano"]["loaded"] = False
             self.components["pop2piano"]["error"] = f"Failed to preload Pop2Piano: {exc}"
 
-    def _preload_demucs(self) -> None:
+    def _preload_demucs(self, device: str) -> None:
         if not self.components["demucs"]["ready"]:
             return
         start = time.perf_counter()
@@ -246,13 +262,42 @@ class ModelRegistry:
                     sys.path.insert(0, path)
             from demucs.api import Separator
 
-            self.loaded_components["demucs"] = Separator(model="htdemucs", device="cpu", progress=False)
+            resolved_device = self._resolve_torch_device(device)
+            separator = Separator(model="htdemucs", device=resolved_device, progress=False)
+            separator.model.to(resolved_device)
+            separator.model.eval()
+            self.loaded_components["demucs"] = separator
             self.components["demucs"]["loaded"] = True
+            self.components["demucs"]["device"] = resolved_device
             self.components["demucs"]["preload_seconds"] = round(time.perf_counter() - start, 3)
         except Exception as exc:  # noqa: BLE001 - surfaced through status API
             self.components["demucs"]["ready"] = False
             self.components["demucs"]["loaded"] = False
             self.components["demucs"]["error"] = f"Failed to preload Demucs: {exc}"
+
+    def _ddsp_preload_device(self, config: BackendConfig) -> str:
+        if config.runtime.preload_mode == "torch_cuda":
+            return "cuda"
+        if config.runtime.preload_mode == "torch_cpu":
+            return "cpu"
+        return self._resolve_torch_device(config.runtime.device)
+
+    def _demucs_preload_device(self, config: BackendConfig) -> str:
+        return self._ddsp_preload_device(config)
+
+    def _pop2piano_preload_device(self, config: BackendConfig) -> str:
+        if config.runtime.preload_mode == "torch_cuda":
+            return "cuda"
+        if config.runtime.preload_mode == "torch_cpu":
+            return "cpu"
+        return self._resolve_torch_device(config.runtime.pop2piano_device)
+
+    def _resolve_torch_device(self, device: str) -> str:
+        if device == "auto":
+            import torch
+
+            return "cuda" if torch.cuda.is_available() else "cpu"
+        return device
 
     def _path_status(self, path: Path, expect_dir: bool) -> dict[str, Any]:
         ready = path.exists() and (path.is_dir() if expect_dir else path.is_file())

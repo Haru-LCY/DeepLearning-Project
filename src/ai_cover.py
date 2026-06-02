@@ -12,7 +12,7 @@ import shutil
 import subprocess
 import sys
 import time
-from typing import Callable
+from typing import Any, Callable
 
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
@@ -191,6 +191,30 @@ def copy_demucs_outputs(preprocessed_audio: Path, raw_output_root: Path, artifac
     shutil.copy2(no_vocals_src, artifacts.no_vocals)
 
 
+def run_demucs_inprocess(input_audio: Path, artifacts: CoverArtifacts, separator: Any, device: str) -> None:
+    """Separate vocals with an already-loaded Demucs separator."""
+    from demucs.api import save_audio
+
+    separator_device = getattr(separator, "_device", device)
+    separator.update_parameter(device=separator_device, progress=False)
+    _, sources = separator.separate_audio_file(input_audio)
+    if "vocals" not in sources:
+        raise RuntimeError("Demucs did not return a vocals stem.")
+
+    vocals = sources["vocals"]
+    accompaniment_sources = [source for name, source in sources.items() if name != "vocals"]
+    if not accompaniment_sources:
+        raise RuntimeError("Demucs did not return accompaniment stems.")
+
+    no_vocals = accompaniment_sources[0].clone()
+    for source in accompaniment_sources[1:]:
+        no_vocals += source
+
+    artifacts.vocals.parent.mkdir(parents=True, exist_ok=True)
+    save_audio(vocals, str(artifacts.vocals), samplerate=separator.samplerate)
+    save_audio(no_vocals, str(artifacts.no_vocals), samplerate=separator.samplerate)
+
+
 def resolve_ddsp_assets(model_ckpt: Path, repair: bool = True) -> None:
     import yaml
 
@@ -302,6 +326,107 @@ def build_pop2piano_command(
     )
 
 
+def _resolve_pop2piano_device(device: str) -> str:
+    if device not in {"auto", "cpu", "cuda"}:
+        raise ValueError(f"Unsupported Pop2Piano device: {device}")
+
+    import torch
+
+    if device == "auto":
+        return "cuda" if torch.cuda.is_available() else "cpu"
+    return device
+
+
+def run_pop2piano_inprocess(
+    input_audio: Path,
+    output_midi: Path,
+    model: str,
+    composer: str,
+    device: str,
+    max_length: int,
+    preloaded_components: dict[str, Any] | None = None,
+    sampling_rate: int = 44100,
+) -> dict[str, Any]:
+    """Run Pop2Piano without spawning a second Python interpreter."""
+    import librosa
+    import torch
+
+    timings: dict[str, Any] = {}
+    total_start = time.perf_counter()
+    resolved_device = (
+        str(preloaded_components["device"])
+        if preloaded_components is not None and "device" in preloaded_components
+        else _resolve_pop2piano_device(device)
+    )
+
+    start = time.perf_counter()
+    if preloaded_components is None:
+        from transformers import Pop2PianoForConditionalGeneration, Pop2PianoProcessor
+
+        processor = Pop2PianoProcessor.from_pretrained(model)
+        pop2piano_model = Pop2PianoForConditionalGeneration.from_pretrained(model)
+    else:
+        processor = preloaded_components["processor"]
+        pop2piano_model = preloaded_components["model"]
+
+    pop2piano_model = pop2piano_model.to(resolved_device)
+    pop2piano_model.eval()
+    timings["load_model"] = round(time.perf_counter() - start, 3)
+    print(f'[T] load_model: {timings["load_model"]}s')
+
+    start = time.perf_counter()
+    audio, sr = librosa.load(input_audio, sr=sampling_rate, mono=True)
+    timings["load_audio"] = round(time.perf_counter() - start, 3)
+    print(f'[T] load_audio: {timings["load_audio"]}s')
+
+    start = time.perf_counter()
+    inputs = processor(
+        audio=audio,
+        sampling_rate=sr,
+        return_tensors="pt",
+    )
+    inputs = {key: value.to(resolved_device) if hasattr(value, "to") else value for key, value in inputs.items()}
+    timings["preprocess"] = round(time.perf_counter() - start, 3)
+    print(f'[T] preprocess: {timings["preprocess"]}s')
+
+    start = time.perf_counter()
+    with torch.no_grad():
+        generated = pop2piano_model.generate(
+            input_features=inputs["input_features"],
+            attention_mask=inputs.get("attention_mask"),
+            composer=composer,
+            max_length=max_length,
+        )
+    timings["model_generate"] = round(time.perf_counter() - start, 3)
+    print(f'[T] model_generate (max_length={max_length}): {timings["model_generate"]}s')
+
+    start = time.perf_counter()
+    generated = generated.cpu()
+    decoder_inputs = {
+        key: value.cpu() if hasattr(value, "cpu") else value
+        for key, value in inputs.items()
+    }
+    decoded = processor.batch_decode(generated, feature_extractor_output=decoder_inputs)
+    midi = decoded["pretty_midi_objects"][0]
+    timings["decode"] = round(time.perf_counter() - start, 3)
+    print(f'[T] decode: {timings["decode"]}s')
+
+    start = time.perf_counter()
+    output_midi.parent.mkdir(parents=True, exist_ok=True)
+    midi.write(str(output_midi))
+    timings["save_midi"] = round(time.perf_counter() - start, 3)
+    print(f'[T] save_midi: {timings["save_midi"]}s')
+    print(output_midi)
+
+    timings["device"] = resolved_device
+    timings["total"] = round(time.perf_counter() - total_start, 3)
+
+    timing_path = output_midi.parent / "pop2piano_timings.json"
+    timing_path.write_text(json.dumps(timings, indent=2), encoding="utf-8")
+    print(f"[T] Timing report saved to {timing_path}")
+    return timings
+
+
 def build_mix_command(
     vocals_audio: Path,
     piano_audio: Path,
@@ -383,6 +508,9 @@ def run_ai_piano_cover(
     pop2piano_composer: str = "composer1",
     pop2piano_device: str = "cpu",
     pop2piano_max_length: int = 256,
+    demucs_separator: Any | None = None,
+    ddsp_runtime: Any | None = None,
+    pop2piano_components: dict[str, Any] | None = None,
     soundfont: Path = DEFAULT_SOUNDFONT,
     fluidsynth_bin: Path = DEFAULT_FLUIDSYNTH_BIN,
     fluidsynth_lib_dir: Path = DEFAULT_FLUIDSYNTH_LIB_DIR,
@@ -445,11 +573,19 @@ def run_ai_piano_cover(
     print("")
     print("Stage 1: separate vocals with Demucs")
     stage_start = time.perf_counter()
-    _run(build_demucs_command(artifacts.preprocessed_audio, raw_demucs_root, device), dry_run=dry_run)
-    if not dry_run:
-        copy_demucs_outputs(artifacts.preprocessed_audio, raw_demucs_root, artifacts)
-        print(f"Vocals: {artifacts.vocals}")
-        print(f"No vocals: {artifacts.no_vocals}")
+    if demucs_separator is not None:
+        if dry_run:
+            print(f"Would run Demucs in-process with preloaded model -> {artifacts.vocals}")
+        else:
+            run_demucs_inprocess(artifacts.preprocessed_audio, artifacts, demucs_separator, device)
+            print(f"Vocals: {artifacts.vocals}")
+            print(f"No vocals: {artifacts.no_vocals}")
+    else:
+        _run(build_demucs_command(artifacts.preprocessed_audio, raw_demucs_root, device), dry_run=dry_run)
+        if not dry_run:
+            copy_demucs_outputs(artifacts.preprocessed_audio, raw_demucs_root, artifacts)
+            print(f"Vocals: {artifacts.vocals}")
+            print(f"No vocals: {artifacts.no_vocals}")
     stage_timings["separate_vocals"] = round(time.perf_counter() - stage_start, 3)
     _emit_progress(progress_callback, "separate_vocals", 25, "Separated vocals and accompaniment")
 
@@ -457,19 +593,35 @@ def run_ai_piano_cover(
     print("Stage 2: convert vocals with DDSP-SVC")
     _emit_progress(progress_callback, "voice_conversion", 30, "Starting voice conversion")
     stage_start = time.perf_counter()
-    _run(
-        build_ddsp_command(
-            input_vocals=artifacts.vocals,
-            output_vocals=artifacts.ddsp_vocals,
-            model_ckpt=ddsp_model_ckpt,
-            device=device,
-            spk_id=spk_id,
-            key=key,
-            pitch_extractor=pitch_extractor,
-            cache_dir=runtime_cache_dir,
-        ),
-        dry_run=dry_run,
-    )
+    if ddsp_runtime is not None:
+        if dry_run:
+            print(f"Would run DDSP-SVC in-process with preloaded model -> {artifacts.ddsp_vocals}")
+        else:
+            from src.ddsp_inprocess import run_ddsp_inprocess
+
+            run_ddsp_inprocess(
+                input_vocals=artifacts.vocals,
+                output_vocals=artifacts.ddsp_vocals,
+                runtime=ddsp_runtime,
+                spk_id=spk_id,
+                key=key,
+                pitch_extractor=pitch_extractor,
+                cache_dir=runtime_cache_dir,
+            )
+    else:
+        _run(
+            build_ddsp_command(
+                input_vocals=artifacts.vocals,
+                output_vocals=artifacts.ddsp_vocals,
+                model_ckpt=ddsp_model_ckpt,
+                device=device,
+                spk_id=spk_id,
+                key=key,
+                pitch_extractor=pitch_extractor,
+                cache_dir=runtime_cache_dir,
+            ),
+            dry_run=dry_run,
+        )
     stage_timings["voice_conversion"] = round(time.perf_counter() - stage_start, 3)
     _emit_progress(progress_callback, "voice_conversion", 50, "Converted vocals")
 
@@ -478,18 +630,32 @@ def run_ai_piano_cover(
     _emit_progress(progress_callback, "piano_cover", 55, "Starting piano cover generation")
     pop2piano_input_audio = artifacts.preprocessed_audio if pre_pitch_shift != 0.0 else input_audio
     stage_start = time.perf_counter()
-    _run(
-        build_pop2piano_command(
-            input_audio=pop2piano_input_audio,
-            output_midi=artifacts.piano_midi,
-            model=pop2piano_model,
-            composer=pop2piano_composer,
-            device=pop2piano_device,
-            max_length=pop2piano_max_length,
-            cache_dir=runtime_cache_dir,
-        ),
-        dry_run=dry_run,
-    )
+    if pop2piano_components is not None:
+        if dry_run:
+            print(f"Would run Pop2Piano in-process with preloaded model -> {artifacts.piano_midi}")
+        else:
+            run_pop2piano_inprocess(
+                input_audio=pop2piano_input_audio,
+                output_midi=artifacts.piano_midi,
+                model=pop2piano_model,
+                composer=pop2piano_composer,
+                device=pop2piano_device,
+                max_length=pop2piano_max_length,
+                preloaded_components=pop2piano_components,
+            )
+    else:
+        _run(
+            build_pop2piano_command(
+                input_audio=pop2piano_input_audio,
+                output_midi=artifacts.piano_midi,
+                model=pop2piano_model,
+                composer=pop2piano_composer,
+                device=pop2piano_device,
+                max_length=pop2piano_max_length,
+                cache_dir=runtime_cache_dir,
+            ),
+            dry_run=dry_run,
+        )
     stage_timings["piano_cover"] = round(time.perf_counter() - stage_start, 3)
     _emit_progress(progress_callback, "piano_cover", 72, "Generated piano MIDI")
 

@@ -13,7 +13,7 @@ from uuid import uuid4
 
 from src.ai_cover import CoverArtifacts, mix_cover_audio, run_ai_piano_cover
 
-from backend.model_registry import ModelRegistry
+from backend.model_registry import MODEL_PRELOAD_MODES, ModelRegistry
 from backend.progress import ProgressBroker
 from backend.settings import RuntimeConfig
 
@@ -135,7 +135,7 @@ class JobManager:
             self._update(job_id, status="cancelled", message="Cancelled before processing", progress=0)
             self._publish(self.get_job(job_id), "cancelled")
         elif record.status == "running":
-            self._update(job_id, cancel_requested=True, message="Cancellation requested; running subprocesses cannot be interrupted safely")
+            self._update(job_id, cancel_requested=True, message="Cancellation requested; running model stages cannot be interrupted safely")
             self._publish(self.get_job(job_id), "progress")
         return self.public_job(job_id)
 
@@ -225,6 +225,9 @@ class JobManager:
         try:
             record = self.get_job(job_id)
             role = self.registry.get_ready_role(record.params.role_id)
+            demucs_separator = self._loaded_component("demucs")
+            ddsp_runtime = self._loaded_role_runtime(role.id)
+            pop2piano_components = self._loaded_component("pop2piano")
             self._update(job_id, status="running", stage=1, stage_name="separate_vocals", progress=0, message="Starting job")
 
             result = run_ai_piano_cover(
@@ -242,6 +245,9 @@ class JobManager:
                 pop2piano_composer=self.runtime.pop2piano_composer,
                 pop2piano_device=self.runtime.pop2piano_device,
                 pop2piano_max_length=self.runtime.pop2piano_max_length,
+                demucs_separator=demucs_separator,
+                ddsp_runtime=ddsp_runtime,
+                pop2piano_components=pop2piano_components,
                 soundfont=self.runtime.soundfont,
                 fluidsynth_bin=self.runtime.fluidsynth_bin,
                 fluidsynth_lib_dir=self.runtime.fluidsynth_lib_dir,
@@ -273,6 +279,22 @@ class JobManager:
             error_path.parent.mkdir(parents=True, exist_ok=True)
             error_path.write_text(traceback.format_exc(), encoding="utf-8")
             self._publish(self.get_job(job_id), "failed")
+
+    def _loaded_component(self, name: str) -> Any | None:
+        if self.runtime.preload_mode not in MODEL_PRELOAD_MODES:
+            return None
+        component = self.registry.loaded_components.get(name)
+        if component is None:
+            raise RuntimeError(f"Preloaded component is not available: {name}")
+        return component
+
+    def _loaded_role_runtime(self, role_id: str) -> Any | None:
+        if self.runtime.preload_mode not in MODEL_PRELOAD_MODES:
+            return None
+        runtime = self.registry.loaded_checkpoints.get(role_id)
+        if runtime is None:
+            raise RuntimeError(f"Preloaded DDSP runtime is not available for role: {role_id}")
+        return runtime
 
     def _handle_progress(self, job_id: str, stage_name: str, progress: int, message: str) -> None:
         self._update(
