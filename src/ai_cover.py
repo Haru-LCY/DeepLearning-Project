@@ -14,6 +14,7 @@ import shlex
 import shutil
 import subprocess
 import sys
+import tempfile
 import threading
 import time
 from typing import Any, Callable, Iterator
@@ -39,6 +40,7 @@ DEFAULT_FLUIDSYNTH_BIN = REPO_ROOT / "assets" / "soundfonts" / "fluidsynth_pkg" 
 DEFAULT_FLUIDSYNTH_LIB_DIR = REPO_ROOT / "assets" / "soundfonts" / "runtime_libs" / "usr" / "lib" / "x86_64-linux-gnu"
 ProgressCallback = Callable[[str, int, str], None]
 USE_PARALLEL_COVER_STAGES = True
+PREPROCESS_PITCH_SHIFT_METHOD = "torchaudio-pitchshift-cuda"
 _CUDA_STREAM_LOCK = threading.Lock()
 _CUDA_STREAMS: dict[tuple[str, str], Any] = {}
 
@@ -275,6 +277,113 @@ def build_preprocess_command(input_audio: Path, output_wav: Path, pre_pitch_shif
         argv=argv,
         env=_ffmpeg_runtime_env(),
     )
+
+
+def build_decode_audio_command(input_audio: Path, output_wav: Path) -> CommandSpec:
+    return CommandSpec(
+        cwd=REPO_ROOT,
+        argv=[
+            "ffmpeg",
+            "-y",
+            "-hide_banner",
+            "-loglevel",
+            "error",
+            "-i",
+            str(input_audio),
+            "-vn",
+            "-sn",
+            "-dn",
+            "-map",
+            "0:a:0",
+            "-c:a",
+            "pcm_f32le",
+            str(output_wav),
+        ],
+        env=_ffmpeg_runtime_env(),
+    )
+
+
+def _load_audio_for_torchaudio_pitch_shift(
+    input_audio: Path,
+    temp_dir: Path,
+) -> Path:
+    if input_audio.suffix.lower() == ".wav":
+        return input_audio
+
+    decoded_audio = temp_dir / "preprocess_input.wav"
+    _run(build_decode_audio_command(input_audio, decoded_audio), dry_run=False)
+    return decoded_audio
+
+
+def preprocess_pitch_shift_torchaudio_cuda(
+    input_audio: Path,
+    output_wav: Path,
+    pre_pitch_shift: float,
+    device: str,
+    dry_run: bool = False,
+) -> Path:
+    if not math.isfinite(pre_pitch_shift):
+        raise ValueError("Preprocess pitch shift must be a finite number.")
+    if pre_pitch_shift == 0.0:
+        return input_audio
+
+    if dry_run:
+        print(
+            "Would run "
+            f"{PREPROCESS_PITCH_SHIFT_METHOD}: {input_audio} -> {output_wav} "
+            f"({pre_pitch_shift:+g} semitones on {device})"
+        )
+        return output_wav
+
+    import torch
+    import torchaudio
+
+    torch_device = torch.device(device)
+    if torch_device.type != "cuda" or not torch.cuda.is_available():
+        raise RuntimeError(
+            f"{PREPROCESS_PITCH_SHIFT_METHOD} requires an available CUDA device; got {device!r}."
+        )
+
+    output_wav.parent.mkdir(parents=True, exist_ok=True)
+    with tempfile.TemporaryDirectory(prefix="pianoformer_preprocess_pitch_") as temp_root:
+        temp_dir = Path(temp_root)
+        loaded_audio = _load_audio_for_torchaudio_pitch_shift(input_audio, temp_dir)
+        try:
+            waveform, sample_rate = torchaudio.load(str(loaded_audio))
+        except Exception as load_exc:
+            if loaded_audio != input_audio:
+                raise
+            decoded_audio = temp_dir / "preprocess_input.wav"
+            _run(build_decode_audio_command(input_audio, decoded_audio), dry_run=False)
+            try:
+                waveform, sample_rate = torchaudio.load(str(decoded_audio))
+            except Exception as decoded_exc:
+                raise RuntimeError(f"Could not load decoded audio for pitch shift: {input_audio}") from decoded_exc
+            print(f"Direct torchaudio WAV load failed; used FFmpeg decode fallback: {load_exc}")
+        if waveform.numel() == 0:
+            raise RuntimeError(f"Input audio contained no samples: {input_audio}")
+
+        transform = torchaudio.transforms.PitchShift(
+            sample_rate=sample_rate,
+            n_steps=pre_pitch_shift,
+        ).to(torch_device)
+        waveform = waveform.to(torch_device, non_blocking=True)
+        torch.cuda.synchronize()
+        with torch.inference_mode():
+            shifted = transform(waveform)
+        torch.cuda.synchronize()
+        shifted = shifted.detach().cpu()
+        torchaudio.save(
+            str(output_wav),
+            shifted,
+            sample_rate,
+            format="wav",
+            encoding="PCM_F",
+            bits_per_sample=32,
+        )
+
+    del waveform, shifted, transform
+    return output_wav
 
 
 def build_demucs_command(input_audio: Path, raw_output_root: Path, device: str) -> CommandSpec:
@@ -708,6 +817,8 @@ def run_ai_piano_cover(
     stage_timings: dict[str, float] = {}
     total_start = time.perf_counter()
 
+    if not math.isfinite(pre_pitch_shift):
+        raise ValueError("Preprocess pitch shift must be a finite number.")
     if not input_audio.exists():
         raise FileNotFoundError(f"Input audio was not found: {input_audio}")
     if not DEMUCS_ROOT.exists():
@@ -737,22 +848,30 @@ def run_ai_piano_cover(
     print("")
     _emit_progress(progress_callback, "preprocess", 0, "Starting audio preprocessing")
 
-    print("Stage 0: preprocess audio")
-    if pre_pitch_shift != 0.0:
-        print(f"Preprocess pitch shift: {pre_pitch_shift:+g} semitones")
-    stage_start = time.perf_counter()
-    _run(
-        build_preprocess_command(
-            input_audio,
-            artifacts.preprocessed_audio,
+    preprocessed_input_audio = artifacts.preprocessed_audio if pre_pitch_shift != 0.0 else input_audio
+    if pre_pitch_shift == 0.0:
+        print("Stage 0: preprocess audio (skipped; pre_pitch_shift is 0)")
+        stage_timings["preprocess"] = 0.0
+        _emit_progress(progress_callback, "separate_vocals", 10, "Skipped audio preprocessing")
+    else:
+        print("Stage 0: preprocess audio")
+        preprocess_device = device if _is_cuda_device(device) else "cuda"
+        print(
+            f"Preprocess pitch shift: {pre_pitch_shift:+g} semitones "
+            f"using {PREPROCESS_PITCH_SHIFT_METHOD} on {preprocess_device}"
+        )
+        stage_start = time.perf_counter()
+        preprocess_pitch_shift_torchaudio_cuda(
+            input_audio=input_audio,
+            output_wav=artifacts.preprocessed_audio,
             pre_pitch_shift=pre_pitch_shift,
-        ),
-        dry_run=dry_run,
-    )
-    stage_timings["preprocess"] = round(time.perf_counter() - stage_start, 3)
-    _emit_progress(progress_callback, "separate_vocals", 10, "Preprocessed audio")
-
-    pop2piano_input_audio = artifacts.preprocessed_audio if pre_pitch_shift != 0.0 else input_audio
+            device=preprocess_device,
+            dry_run=dry_run,
+        )
+        stage_timings["preprocess"] = round(time.perf_counter() - stage_start, 3)
+        _emit_progress(progress_callback, "separate_vocals", 10, "Preprocessed audio")
+        if not dry_run:
+            _cleanup_cuda_memory("preprocess pitch shift")
 
     def run_vocal_branch() -> dict[str, float]:
         branch_timings: dict[str, float] = {}
@@ -774,13 +893,13 @@ def run_ai_piano_cover(
                 if dry_run:
                     print(f"Would run Demucs in-process with preloaded model -> {artifacts.vocals}")
                 else:
-                    run_demucs_inprocess(artifacts.preprocessed_audio, artifacts, demucs_separator, device)
+                    run_demucs_inprocess(preprocessed_input_audio, artifacts, demucs_separator, device)
                     print(f"Vocals: {artifacts.vocals}")
                     # print(f"No vocals: {artifacts.no_vocals}")
             else:
-                _run(build_demucs_command(artifacts.preprocessed_audio, raw_demucs_root, device), dry_run=dry_run)
+                _run(build_demucs_command(preprocessed_input_audio, raw_demucs_root, device), dry_run=dry_run)
                 if not dry_run:
-                    copy_demucs_outputs(artifacts.preprocessed_audio, raw_demucs_root, artifacts)
+                    copy_demucs_outputs(preprocessed_input_audio, raw_demucs_root, artifacts)
                     print(f"Vocals: {artifacts.vocals}")
                     print(f"No vocals: {artifacts.no_vocals}")
             branch_timings["separate_vocals"] = round(time.perf_counter() - stage_start, 3)
@@ -845,7 +964,7 @@ def run_ai_piano_cover(
                     print(f"Would run Pop2Piano in-process with preloaded model -> {artifacts.piano_midi}")
                 else:
                     run_pop2piano_inprocess(
-                        input_audio=pop2piano_input_audio,
+                        input_audio=preprocessed_input_audio,
                         output_midi=artifacts.piano_midi,
                         model=pop2piano_model,
                         composer=pop2piano_composer,
@@ -857,7 +976,7 @@ def run_ai_piano_cover(
             else:
                 _run(
                     build_pop2piano_command(
-                        input_audio=pop2piano_input_audio,
+                        input_audio=preprocessed_input_audio,
                         output_midi=artifacts.piano_midi,
                         model=pop2piano_model,
                         composer=pop2piano_composer,
