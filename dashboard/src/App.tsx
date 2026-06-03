@@ -777,7 +777,7 @@ function WorkflowCard({ job, stages, accentPalette, isDarkMode }: WorkflowCardPr
       <Card.Header pb="3" flexShrink="0">
         <Grid templateColumns="24px 1fr 24px" alignItems="center">
           <Box />
-          <Card.Title textAlign="center" fontSize={{ base: "3xl", md: "4xl" }}>四阶段处理进度</Card.Title>
+          <Card.Title textAlign="center" fontSize={{ base: "3xl", md: "4xl" }}>进度</Card.Title>
           <Box display="flex" justifyContent="flex-end">
             {running && <Spinner size="sm" color={controlAccentColor(accentPalette)} />}
           </Box>

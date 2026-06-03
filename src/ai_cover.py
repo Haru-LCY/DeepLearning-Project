@@ -458,6 +458,26 @@ def _resolve_pop2piano_device(device: str) -> str:
     return device
 
 
+def _pop2piano_sync_before_postprocess_enabled() -> bool:
+    value = os.environ.get("COVER_POP2PIANO_SYNC_BEFORE_POSTPROCESS", "1")
+    return value.strip().lower() not in {"0", "false", "no", "off"}
+
+
+def _sync_cuda_stream_before_pop2piano_postprocess(torch_module: Any, device: str) -> None:
+    if not _pop2piano_sync_before_postprocess_enabled():
+        return
+    if not torch_module.cuda.is_available() or not str(device).startswith("cuda"):
+        return
+
+    torch_device = torch_module.device(device)
+    if torch_device.type != "cuda":
+        return
+
+    # beat_this postprocessing moves CUDA tensors to CPU from worker threads;
+    # ensure logits queued on the branch stream are complete first.
+    torch_module.cuda.current_stream(torch_device).synchronize()
+
+
 def run_pop2piano_inprocess(
     input_audio: Path,
     output_midi: Path,
@@ -512,8 +532,18 @@ def run_pop2piano_inprocess(
         from beat_this.inference import Audio2Beats
 
         beat_tracker = Audio2Beats(checkpoint_path=str(beat_checkpoint), device=resolved_device)
-    beats, _downbeats = beat_tracker(audio, sr)
+
+    if all(hasattr(beat_tracker, name) for name in ("signal2spect", "spect2frames", "frames2beats")):
+        spect = beat_tracker.signal2spect(audio, sr)
+        beat_logits, downbeat_logits = beat_tracker.spect2frames(spect)
+        _sync_cuda_stream_before_pop2piano_postprocess(torch, resolved_device)
+        beats, _downbeats = beat_tracker.frames2beats(beat_logits, downbeat_logits)
+    else:
+        beats, _downbeats = beat_tracker(audio, sr)
+
     beat_times = np.asarray(beats, dtype=np.float32)
+    if beat_times.size < 2:
+        raise RuntimeError(f"Pop2Piano beat tracker returned insufficient beats ({beat_times.size})")
     beat_intervals = np.diff(beat_times)
     bpm = float(60.0 / np.median(beat_intervals)) if beat_intervals.size else 120.0
     timings["rhythm_extract"] = round(time.perf_counter() - start, 3)
