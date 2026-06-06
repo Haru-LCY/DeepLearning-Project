@@ -63,8 +63,8 @@ PianistTransformer/assets/
 !PianistTransformer/assets/gui.png
 
 node_modules/
+/dist/
 /package-lock.json
-/package.json
 
 # agent skills
 .agents
