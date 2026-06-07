@@ -369,7 +369,9 @@ def preprocess_pitch_shift_torchaudio_cuda(
         ).to(torch_device)
         waveform = waveform.to(torch_device, non_blocking=True)
         torch.cuda.synchronize()
-        with torch.inference_mode():
+        # cuDNN can fail to pick an engine for PitchShift's sinc-resample conv1d
+        # on long tracks; keep the operation on CUDA while bypassing cuDNN.
+        with torch.backends.cudnn.flags(enabled=False), torch.inference_mode():
             shifted = transform(waveform)
         torch.cuda.synchronize()
         shifted = shifted.detach().cpu()
