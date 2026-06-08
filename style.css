@@ -1,0 +1,9 @@
+.slide-left-enter-active,
+.slide-left-leave-active {
+  transition-duration: 200ms !important;
+}
+
+html:not(.dark) .slidev-layout.end {
+  background: white;
+  color: black;
+}
